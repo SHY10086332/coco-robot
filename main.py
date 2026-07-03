@@ -6,7 +6,7 @@ Coco 导购机器人 — 主入口
     # 开发模式（PC模拟，无硬件）
     python main.py --debug
 
-    # 生产模式（树莓派5，带硬件）
+    # 生产模式（Orange Pi 5 / 树莓派，带硬件）
     python main.py
 
     # 仅测试运动学模块
@@ -141,7 +141,7 @@ def run_debug_mode():
 
 def run_production_mode():
     """
-    生产模式：树莓派5 + 真实硬件。
+    生产模式：Orange Pi 5 + 真实硬件。
     初始化所有外设，启动6个线程。
     """
     log = logging.getLogger("coco.production")

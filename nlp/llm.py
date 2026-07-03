@@ -8,7 +8,7 @@ Coco 导购机器人 — LLM 推理接口（Ollama）
 - 超时/错误处理
 - 模拟模式（Ollama 不在线时用规则回复，方便开发调试）
 
-树莓派5 推荐模型: qwen2.5:0.5b (~400MB) 或 qwen2.5:1.5b (~1GB)
+树莓派5 推荐模型: qwen2.5:1.5b (~1GB, 回答质量好)
 """
 
 import logging
@@ -22,13 +22,14 @@ class LLMEngine:
     """Ollama LLM 调用封装"""
 
     def __init__(self,
-                 host: str = "http://localhost:11434",
-                 model: str = "qwen2.5:0.5b",
-                 timeout: float = 30.0,
+                 host: str = None,
+                 model: str = None,
+                 timeout: float = None,
                  max_tokens: int = 256):
-        self.host = host.rstrip("/")
-        self.model = model
-        self.timeout = timeout
+        from config import OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_TIMEOUT
+        self.host = (host or OLLAMA_HOST).rstrip("/")
+        self.model = model or OLLAMA_MODEL
+        self.timeout = timeout or OLLAMA_TIMEOUT
         self.max_tokens = max_tokens
         self._available = None          # None=未检测, True=在线, False=离线
         self._last_check = 0.0

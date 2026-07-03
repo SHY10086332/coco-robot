@@ -2,7 +2,7 @@
 Coco 导购机器人 — 电机控制模块
 
 L298N 双H桥驱动 + 差速履带底盘控制。
-支持 DEBUG 模式（PC模拟）和生产模式（树莓派5 GPIO）。
+支持 DEBUG 模式（PC模拟）和生产模式（gpiod / Orange Pi 5 / 树莓派 GPIO）。
 
 L298N 控制逻辑（每路）:
     IN1=HIGH, IN2=LOW  → 正转（前进）
@@ -32,14 +32,14 @@ from config import (
 )
 from kinematics import DifferentialKinematics, PIDController, WheelSpeed
 
-# 尝试导入真实 GPIO
+# 尝试导入真实 GPIO（使用 Linux 标准 gpiod 接口，兼容 Orange Pi 5 / 树莓派等）
 GPIO_AVAILABLE = False
 if not DEBUG:
     try:
-        import RPi.GPIO as GPIO
+        import gpiod
         GPIO_AVAILABLE = True
     except ImportError:
-        log.warning("RPi.GPIO 不可用，回退到模拟模式")
+        log.warning("gpiod 不可用，回退到模拟模式。安装: pip install gpiod")
 
 
 # ============================================================
@@ -47,73 +47,166 @@ if not DEBUG:
 # ============================================================
 
 class GPIOWrapper:
-    """GPIO 抽象：DEBUG 模式打印日志，生产模式操作真实引脚"""
+    """GPIO 抽象：DEBUG 模式打印日志，生产模式通过 gpiod 操作真实引脚。
+
+    pin 参数统一使用 (chip, line) 元组，如 (4, 18) 对应 /dev/gpiochip4 line 18。
+    软件 PWM 通过后台线程实现（兼容没有硬件 PWM 的 SBC）。
+    """
+
+    PWM_FREQ = 1000  # 软件 PWM 默认频率 (Hz)
 
     def __init__(self, debug: bool = True):
         self.debug = debug
-        self._pin_outputs = {}   # pin → bool (模拟输出状态)
-        self._pwm_duties = {}    # pin → float (模拟 PWM 占空比)
-        self._pwm_instances = {} # pin → RPi.GPIO PWM 实例
+        self._pin_outputs = {}      # pin → bool (模拟输出状态)
+        self._pwm_duties = {}       # pin → float (PWM 占空比 0~100)
+        self._pwm_stop_flags = {}   # pin → threading.Event
+        self._pwm_threads = {}      # pin → threading.Thread
+        self._lines = {}            # pin → (gpiod.Chip, gpiod.Line) 真实 GPIO
 
-        if not self.debug and GPIO_AVAILABLE:
-            GPIO.setmode(GPIO.BCM)
+    # ----------------------------------------------------------
+    # 内部：获取/缓存 gpiod line
+    # ----------------------------------------------------------
+    def _get_line(self, pin: tuple):
+        """返回已缓存的 gpiod Line 对象，必要时打开 chip 并请求。"""
+        if pin not in self._lines:
+            chip_num, line_num = pin
+            chip = gpiod.Chip(f'/dev/gpiochip{chip_num}')
+            line = chip.get_line(line_num)
+            self._lines[pin] = (chip, line)
+        return self._lines[pin]
 
-    def setup(self, pin: int, mode: str, initial=None):
+    # ----------------------------------------------------------
+    # 公共 API（与旧版 RPi.GPIO 版完全兼容）
+    # ----------------------------------------------------------
+    def setup(self, pin, mode: str, initial=None):
         if self.debug:
             self._pin_outputs[pin] = initial if initial is not None else False
             log.debug(f"[SIM] GPIO{pin} 初始化 mode={mode}")
-        else:
-            if mode == "OUT":
-                init = GPIO.LOW if initial is None else (GPIO.HIGH if initial else GPIO.LOW)
-                GPIO.setup(pin, GPIO.OUT, initial=init)
-            else:
-                GPIO.setup(pin, GPIO.IN)
+            return
 
-    def output(self, pin: int, state: bool):
+        chip, line = self._get_line(pin)
+        if mode == "OUT":
+            default_val = 1 if initial else 0
+            line.request('coco', gpiod.LineRequest.DIRECTION_OUTPUT,
+                         default_vals=[default_val])
+        else:
+            line.request('coco', gpiod.LineRequest.DIRECTION_INPUT)
+
+    def output(self, pin, state: bool):
         if self.debug:
             self._pin_outputs[pin] = state
-        else:
-            GPIO.output(pin, GPIO.HIGH if state else GPIO.LOW)
+            return
+        _, line = self._lines[pin]
+        line.set_value(1 if state else 0)
 
-    def input(self, pin: int) -> bool:
+    def input(self, pin) -> bool:
         if self.debug:
             return self._pin_outputs.get(pin, False)
-        return GPIO.input(pin) == GPIO.HIGH
+        _, line = self._lines[pin]
+        return line.get_value() == 1
 
-    def pwm_start(self, pin: int, duty: float):
-        """duty: 0~100"""
+    def pwm_start(self, pin, duty: float):
+        """duty: 0~100。软件 PWM 通过后台线程实现。"""
         duty = max(0, min(100, duty))
-        if self.debug:
-            self._pwm_duties[pin] = duty
-        else:
-            if pin not in self._pwm_instances:
-                pwm = GPIO.PWM(pin, 1000)  # 1kHz
-                pwm.start(duty)
-                self._pwm_instances[pin] = pwm
-            else:
-                self._pwm_instances[pin].ChangeDutyCycle(duty)
+        self._pwm_duties[pin] = duty
 
-    def pwm_stop(self, pin: int):
+        if self.debug:
+            return
+
+        # 停止旧 PWM 线程（如果存在）
+        self.pwm_stop(pin)
+
+        # 确保 GPIO 已初始化为输出
+        chip, line = self._get_line(pin)
+        if not line.is_requested():
+            line.request('coco', gpiod.LineRequest.DIRECTION_OUTPUT,
+                         default_vals=[0])
+
+        # 启动 PWM 线程
+        stop_flag = threading.Event()
+        self._pwm_stop_flags[pin] = stop_flag
+
+        t = threading.Thread(
+            target=self._pwm_worker,
+            args=(pin,),
+            daemon=True
+        )
+        self._pwm_threads[pin] = t
+        t.start()
+
+    def pwm_stop(self, pin):
         if self.debug:
             self._pwm_duties[pin] = 0
-        else:
-            if pin in self._pwm_instances:
-                self._pwm_instances[pin].stop()
-                del self._pwm_instances[pin]
+            return
 
-    def get_pwm(self, pin: int) -> float:
-        """返回当前 PWM 占空比（调试用）"""
-        if self.debug:
-            return self._pwm_duties.get(pin, 0)
-        return 0  # 真实硬件不缓存
+        # 发送停止信号
+        if pin in self._pwm_stop_flags:
+            self._pwm_stop_flags[pin].set()
+
+        # 等待线程结束
+        if pin in self._pwm_threads:
+            self._pwm_threads[pin].join(timeout=0.5)
+            del self._pwm_threads[pin]
+
+        if pin in self._pwm_stop_flags:
+            del self._pwm_stop_flags[pin]
+
+        # 输出置低
+        if pin in self._lines:
+            try:
+                _, line = self._lines[pin]
+                line.set_value(0)
+            except Exception:
+                pass
+
+        self._pwm_duties[pin] = 0
+
+    def get_pwm(self, pin) -> float:
+        """返回当前 PWM 占空比"""
+        return self._pwm_duties.get(pin, 0)
 
     def cleanup(self):
-        for pin in list(self._pwm_instances):
-            self._pwm_instances[pin].stop()
-        self._pwm_instances.clear()
-        if not self.debug and GPIO_AVAILABLE:
-            GPIO.cleanup()
+        # 停止所有 PWM
+        for pin in list(self._pwm_threads):
+            self.pwm_stop(pin)
+
+        # 释放所有 GPIO lines
+        for pin in list(self._lines):
+            try:
+                _, line = self._lines[pin]
+                line.set_value(0)
+                line.release()
+            except Exception:
+                pass
+        self._lines.clear()
         log.info("GPIO 已清理")
+
+    # ----------------------------------------------------------
+    # 软件 PWM 工作线程
+    # ----------------------------------------------------------
+    def _pwm_worker(self, pin):
+        """后台线程：按占空比翻转 GPIO 实现软件 PWM。"""
+        period = 1.0 / self.PWM_FREQ
+        _, line = self._lines[pin]
+        stop_flag = self._pwm_stop_flags[pin]
+
+        while not stop_flag.is_set():
+            duty = self._pwm_duties.get(pin, 0)
+            if duty <= 0:
+                line.set_value(0)
+                stop_flag.wait(period)  # 休眠一个周期后再检查
+            elif duty >= 100:
+                line.set_value(1)
+                stop_flag.wait(period)
+            else:
+                on_time = period * duty / 100.0
+                off_time = period - on_time
+                line.set_value(1)
+                stop_flag.wait(on_time)
+                if stop_flag.is_set():
+                    break
+                line.set_value(0)
+                stop_flag.wait(off_time)
 
 
 # ============================================================
@@ -252,27 +345,22 @@ class UltrasonicSensor:
                 self._last_distance = 999.0
             return self._last_distance
 
-        if not GPIO_AVAILABLE:
-            return 999.0
-
         # 发送 10μs 触发脉冲
-        GPIO.output(self.trig_pin, GPIO.HIGH)
+        self.gpio.output(self.trig_pin, True)
         time.sleep(0.00001)  # 10μs
-        GPIO.output(self.trig_pin, GPIO.LOW)
+        self.gpio.output(self.trig_pin, False)
 
         # 测量 Echo 高电平持续时间
-        pulse_start = time.time()
-        timeout = pulse_start + 0.04  # 40ms 超时（≈6.8m）
+        timeout = time.time() + 0.04  # 40ms 超时（≈6.8m）
         pulse_start = None
         pulse_end = None
 
         while time.time() < timeout:
-            if GPIO.input(self.echo_pin) == GPIO.HIGH and pulse_start is None:
+            if self.gpio.input(self.echo_pin) and pulse_start is None:
                 pulse_start = time.time()
-            elif GPIO.input(self.echo_pin) == GPIO.LOW and pulse_start is not None:
+            elif not self.gpio.input(self.echo_pin) and pulse_start is not None:
                 pulse_end = time.time()
                 break
-            # yield to other threads
             time.sleep(0.00001)
 
         if pulse_start is not None and pulse_end is not None:

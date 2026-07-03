@@ -58,8 +58,11 @@ class DialogueManager:
 
     def __init__(self,
                  products_json: str = None,
-                 ollama_host: str = "http://localhost:11434",
-                 ollama_model: str = "qwen2.5:0.5b"):
+                 ollama_host: str = None,
+                 ollama_model: str = None):
+        from config import OLLAMA_HOST, OLLAMA_MODEL
+        ollama_host = ollama_host or OLLAMA_HOST
+        ollama_model = ollama_model or OLLAMA_MODEL
         self.rag = RAGEngine(products_json)
         self.intent_parser = IntentParser()
         self.llm = LLMEngine(host=ollama_host, model=ollama_model)

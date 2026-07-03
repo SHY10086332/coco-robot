@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Coco v5 — 3D 预览</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1c1f26;overflow:hidden;font-family:'Microsoft YaHei','Segoe UI',sans-serif}
+canvas{display:block}
+
+#panel{
+  position:fixed;top:16px;right:16px;z-index:10;
+  background:rgba(22,24,30,0.94);border:1px solid rgba(255,255,255,0.1);
+  border-radius:12px;padding:16px 20px;color:#bbb;backdrop-filter:blur(10px);min-width:190px;
+  pointer-events:auto;
+}
+#panel h3{color:#4A90D9;margin:0 0 10px;font-size:15px}
+#panel .r{display:flex;justify-content:space-between;margin:3px 0;font-size:12px}
+#panel .r span:last-child{color:#00FFD0}
+#panel button{
+  display:block;width:100%;margin-top:8px;
+  background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);
+  color:#bbb;padding:6px 0;border-radius:6px;cursor:pointer;font-size:12px;transition:.15s
+}
+#panel button:hover{background:rgba(74,144,217,0.2);border-color:#4A90D9;color:#fff}
+#panel button.on{background:rgba(74,144,217,0.3);border-color:#4A90D9;color:#00FFD0}
+
+#hint{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  color:rgba(255,255,255,0.3);font-size:11px;pointer-events:none
+}
+#err{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  color:#ff6b6b;font-size:14px;display:none;text-align:center;line-height:1.8
+}
+</style>
+</head>
+<body>
+<div id="panel">
+  <h3>COCO v5</h3>
+  <div class="r"><span>总高</span><span>~900mm</span></div>
+  <div class="r"><span>屏幕</span><span>8寸 200mm</span></div>
+  <div class="r"><span>底盘</span><span>340×340mm</span></div>
+  <button id="btnArms" class="on">机械臂 开/关 (A)</button>
+  <button id="btnWire">线框 (W)</button>
+  <button id="btnAuto">自动旋转 (R)</button>
+  <button id="btnReset">重置视角 (F)</button>
+</div>
+<div id="hint">左键旋转 | 滚轮缩放 | 右键平移 | A/W/R/F 快捷键</div>
+<div id="err">
+  <div>Three.js 加载失败</div>
+  <div style="font-size:12px;color:#999">可能原因: CDN连接问题 / 无网络</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./threejs/three.module.js",
+    "three/addons/": "./threejs/"
+  }
+}
+</script>
+
+<script type="module">
+// 如果 CDN 加载失败显示错误
+window.onerror = () => { document.getElementById('err').style.display='block' };
+
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ===================================================================
+// 尺寸 (米)
+// ===================================================================
+const BW  = 0.280;  // 机身底部宽度
+const BTW = 0.220;  // 机身顶部宽度
+const BD  = 0.220;  // 机身深度
+const BH  = 0.600;  // 机身高度
+const SR  = 0.100;  // 屏幕半径 (200mm/2)
+const TILT = 28;    // 屏幕仰角
+const CW   = 0.340; // 底盘总宽
+const CL   = 0.340; // 底盘总长
+const CH   = 0.055; // 底盘高
+const TWC  = 0.250; // 履带中心距
+const TWL  = 0.290; // 履带接地长
+const WR   = 0.035; // 驱动轮半径
+const NH   = 0.025; // 脖子高
+const HH   = 0.110; // 头部后壳高
+const BZ   = CH + 0.005; // 机身底部 = 底盘上方
+
+// 颜色
+const C_WHITE   = 0xF2F3F6;
+const C_BLUE    = 0x4A90D9;
+const C_BLUE_DK = 0x2C5F8A;
+const C_CYAN    = 0x00FFD0;
+const C_SCREEN  = 0x0A0C12;
+const C_DK_GRAY = 0x303338;
+const C_TRACK   = 0x1A1C20;
+const C_SILVER  = 0xC8CDD6;
+const C_GOLD    = 0xFFD700;
+const C_RED     = 0xFF6B35;
+
+// 材质工厂
+const matW = (c, r=0.35) => new THREE.MeshStandardMaterial({color:c, roughness:r, metalness:0});
+const matM = (c, r=0.22) => new THREE.MeshStandardMaterial({color:c, roughness:r, metalness:0.85});
+const matG = (c)        => new THREE.MeshStandardMaterial({color:c, roughness:0.25, emissive:c, emissiveIntensity:0.7});
+
+// ===================================================================
+// 场景
+// ===================================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1e2129);
+scene.fog = new THREE.Fog(0x1e2129, 3, 8);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.1, 15);
+camera.position.set(0.9, 0.55, 1.5);
+camera.lookAt(0, 0.40, 0);
+
+const ctrl = new OrbitControls(camera, renderer.domElement);
+ctrl.target.set(0, 0.40, 0);
+ctrl.enableDamping = true; ctrl.dampingFactor = 0.08;
+ctrl.minDistance = 0.4; ctrl.maxDistance = 4;
+ctrl.maxPolarAngle = Math.PI * 0.78;
+ctrl.update();
+
+// 光照
+scene.add(new THREE.AmbientLight(0x8899bb, 1.3));
+scene.add(new THREE.HemisphereLight(0x8899cc, 0x334455, 0.8));
+
+const sun = new THREE.DirectionalLight(0xffeedd, 5);
+sun.position.set(1.5, 2.5, 2);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048,2048);
+sun.shadow.camera.near=0.1; sun.shadow.camera.far=12;
+sun.shadow.camera.left=-2; sun.shadow.camera.right=2;
+sun.shadow.camera.top=2; sun.shadow.camera.bottom=-0.3;
+sun.shadow.bias=-0.0002;
+sun.shadow.normalBias=0.02;
+scene.add(sun);
+
+const fill = new THREE.DirectionalLight(0x8899cc, 1.5);
+fill.position.set(-0.8, 0.3, -1);
+scene.add(fill);
+
+// 地面
+const gnd = new THREE.Mesh(
+  new THREE.PlaneGeometry(8,8),
+  new THREE.MeshStandardMaterial({color:0x2a2d35, roughness:0.7})
+);
+gnd.rotation.x = -Math.PI/2;
+gnd.receiveShadow = true;
+scene.add(gnd);
+
+// ===================================================================
+// 机身外壳 — 蛋形 LatheGeometry + 正面切平
+// ===================================================================
+function buildBody() {
+  const g = new THREE.Group();
+
+  // 蛋形轮廓: 底宽→中鼓→顶窄
+  const pts = [];
+  const n = 80;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const y = BH * t;
+    let r;
+    if (t < 0.08)      { r = BW/2 * (0.97 + 0.03*t/0.08); }
+    else if (t < 0.32) { r = BW/2 + 0.008 * ((t-0.08)/0.24); }
+    else if (t < 0.65) { const s=(t-0.32)/0.33; r = (BW/2+0.008) - ((BW/2+0.008)-(BW/2-0.012))*s; }
+    else               { const s=(t-0.65)/0.35; r = (BW/2-0.012) - ((BW/2-0.012)-BTW/2)*s; }
+    pts.push(new THREE.Vector2(r, y));
+  }
+
+  const lathe = new THREE.LatheGeometry(pts, 72);
+  // 深度缩放
+  const ds = BD / BW;
+  const pos = lathe.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setZ(i, pos.getZ(i) * ds);
+  }
+  lathe.computeVertexNormals();
+
+  const body = new THREE.Mesh(lathe, matW(C_WHITE, 0.32));
+  body.castShadow = body.receiveShadow = true;
+  g.add(body);
+
+  // 装饰环
+  function ring(y, r, thk=0.0035) {
+    const geo = new THREE.TorusGeometry(r, thk, 12, 64);
+    const m = new THREE.Mesh(geo, matW(C_BLUE, 0.28));
+    m.rotation.x = Math.PI/2;
+    m.position.y = y;
+    m.scale.set(1, 1, ds);
+    g.add(m);
+  }
+  ring(0.012, BW/2+0.005);
+  ring(BH-0.022, BW/2+0.005);
+  // 分段标记
+  ring(0.210, (BW+BTW)/4+0.018, 0.002);
+  ring(0.420, (BW+BTW)/4+0.012, 0.002);
+
+  return g;
+}
+
+// ===================================================================
+// 底盘
+// ===================================================================
+function buildChassis() {
+  const g = new THREE.Group();
+
+  // 基座
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(CW, CH, CL),
+    matW(C_DK_GRAY, 0.4)
+  );
+  base.position.y = CH/2;
+  base.castShadow = base.receiveShadow = true;
+  g.add(base);
+
+  // 上面板
+  const top = new THREE.Mesh(
+    new THREE.BoxGeometry(CW-0.05, 0.004, CL-0.05),
+    matW(0x383b42, 0.3)
+  );
+  top.position.y = CH + 0.005;
+  g.add(top);
+
+  // 防撞条
+  for (let fb of [-1,1]) {
+    const bar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.006,0.006, CW-0.03, 10),
+      matW(0x2a2c30)
+    );
+    bar.rotation.z = Math.PI/2;
+    bar.rotation.y = Math.PI/2;
+    bar.position.set(0, CH/2, fb*(CL/2-0.01));
+    bar.castShadow = true;
+    g.add(bar);
+  }
+  return g;
+}
+
+// ===================================================================
+// 履带
+// ===================================================================
+function buildTracks() {
+  const g = new THREE.Group();
+  const totalL = TWL + WR*2 + 0.01;
+  const tw = 0.028;
+  const trackCY = WR + 0.014;  // 履带中心高度
+
+  for (let side of [-1,1]) {
+    const sx = side * TWC/2;
+    const tg = new THREE.Group();
+
+    // 履带护罩 — 体育场形拉伸
+    const shape = new THREE.Shape();
+    const r2 = WR + 0.007;
+    const hl2 = totalL/2 - r2;
+    shape.absarc(-hl2, 0, r2, Math.PI/2, -Math.PI/2, true);
+    shape.lineTo(hl2, -r2);
+    shape.absarc(hl2, 0, r2, -Math.PI/2, Math.PI/2, true);
+    shape.lineTo(-hl2, r2);
+
+    const covGeo = new THREE.ExtrudeGeometry(shape, {steps:1, depth:tw, bevelEnabled:true, bevelThickness:0.001, bevelSize:0.001});
+    covGeo.translate(0,0,-tw/2);
+    const cov = new THREE.Mesh(covGeo, matW(C_TRACK, 0.7));
+    cov.position.set(sx, trackCY, 0);
+    cov.castShadow = true;
+    tg.add(cov);
+
+    // 轮子
+    for (let fb of [-1,1]) {
+      const sy = fb * TWL/2;
+      for (let layer of [
+        {r:WR+0.003, t:0.012, c:0x1a1a1a, rm:0.85},
+        {r:WR-0.002, t:0.010, c:C_DK_GRAY, rm:0},
+        {r:0.006,    t:0.008, c:C_SILVER,  rm:0.9},
+      ]) {
+        const wh = new THREE.Mesh(
+          new THREE.CylinderGeometry(layer.r, layer.r, layer.t, 28),
+          layer.rm > 0.5 ? matM(layer.c, 0.25) : matW(layer.c)
+        );
+        wh.rotation.x = Math.PI/2;
+        wh.position.set(sx, trackCY, sy);
+        tg.add(wh);
+      }
+    }
+    g.add(tg);
+  }
+  return g;
+}
+
+// ===================================================================
+// 屏幕面板 (28°仰角)
+// ===================================================================
+function buildScreen() {
+  const g = new THREE.Group();
+
+  // 生成表情纹理
+  const cvs = document.createElement('canvas');
+  cvs.width = cvs.height = 512;
+  const ctx = cvs.getContext('2d');
+  const cx = 256, cy = 256, sr2 = 248;
+
+  // 屏幕底色
+  ctx.fillStyle = '#0A0C12';
+  ctx.beginPath(); ctx.arc(cx, cy, sr2, 0, Math.PI*2); ctx.fill();
+
+  // 眼睛
+  for (let ex of [-1,1]) {
+    const exc = cx + ex*sr2*0.30, eyc = cy - sr2*0.06;
+    ctx.fillStyle = '#00FFD0';
+    ctx.beginPath(); ctx.ellipse(exc, eyc, sr2*0.22, sr2*0.28, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#0A0C12';
+    ctx.beginPath(); ctx.arc(exc, eyc+3, sr2*0.08, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(exc+sr2*0.025, eyc-sr2*0.05, sr2*0.035, 0, Math.PI*2); ctx.fill();
+  }
+
+  // 微笑
+  ctx.strokeStyle = '#00FFD0'; ctx.lineWidth = sr2*0.04; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(cx, cy, sr2*0.28, Math.PI*0.22, Math.PI*0.78); ctx.stroke();
+
+  // 腮红
+  for (let ex of [-1,1]) {
+    const grad = ctx.createRadialGradient(cx+ex*sr2*0.55, cy+sr2*0.42, 0, cx+ex*sr2*0.55, cy+sr2*0.42, sr2*0.10);
+    grad.addColorStop(0, 'rgba(255,120,140,0.32)'); grad.addColorStop(1, 'rgba(255,120,140,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.ellipse(cx+ex*sr2*0.55, cy+sr2*0.42, sr2*0.10, sr2*0.05, 0, 0, Math.PI*2); ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = tex.magFilter = THREE.LinearFilter;
+
+  // 外框
+  const bezel = new THREE.Mesh(
+    new THREE.CylinderGeometry(SR+0.018, SR+0.018, 0.010, 64),
+    matM(C_SILVER)
+  );
+  bezel.rotation.x = Math.PI/2;
+  g.add(bezel);
+
+  // 中框
+  const mid = new THREE.Mesh(
+    new THREE.CylinderGeometry(SR+0.006, SR+0.006, 0.003, 64),
+    matW(0xB8BCC4)
+  );
+  mid.rotation.x = Math.PI/2; mid.position.z = 0.0065;
+  g.add(mid);
+
+  // 显示屏
+  const disp = new THREE.Mesh(
+    new THREE.CylinderGeometry(SR, SR, 0.0015, 64),
+    new THREE.MeshStandardMaterial({map:tex, roughness:0.5, emissive:0x00FFD0, emissiveIntensity:0.2, emissiveMap:tex})
+  );
+  disp.rotation.x = Math.PI/2; disp.position.z = 0.0085;
+  g.add(disp);
+
+  return g;
+}
+
+// ===================================================================
+// 头部后壳
+// ===================================================================
+function buildHead() {
+  const g = new THREE.Group();
+  const ds = BD / BW;
+  const neckTop = BH;
+  const headR = SR + 0.030;
+
+  // 脖子
+  const neckGeo = new THREE.CylinderGeometry(BTW/2, headR, NH, 28);
+  const np = neckGeo.attributes.position;
+  for (let i = 0; i < np.count; i++) np.setZ(i, np.getZ(i)*ds);
+  neckGeo.computeVertexNormals();
+  const neck = new THREE.Mesh(neckGeo, matW(C_WHITE));
+  neck.position.y = neckTop + NH/2;
+  neck.castShadow = true;
+  g.add(neck);
+
+  // 头部球壳 (切半)
+  const headGeo = new THREE.SphereGeometry(headR, 44, 24, 0, Math.PI*2, 0, Math.PI*0.52);
+  const hp = headGeo.attributes.position;
+  for (let i = 0; i < hp.count; i++) hp.setZ(i, hp.getZ(i)*0.72);
+  headGeo.computeVertexNormals();
+  const head = new THREE.Mesh(headGeo, matW(C_WHITE));
+  head.position.y = neckTop + NH + headR*0.42;
+  head.castShadow = true;
+  g.add(head);
+
+  return g;
+}
+
+// ===================================================================
+// 天线
+// ===================================================================
+function buildAntenna() {
+  const g = new THREE.Group();
+  const ay = BH + NH + HH - 0.005;
+
+  // 底座
+  const b1 = new THREE.Mesh(new THREE.CylinderGeometry(0.016,0.01,0.014,14), matW(C_BLUE_DK));
+  b1.position.y = ay + 0.007; g.add(b1);
+  const b2 = new THREE.Mesh(new THREE.CylinderGeometry(0.01,0.005,0.006,12), matW(C_BLUE_DK));
+  b2.position.y = ay + 0.017; g.add(b2);
+
+  // 杆
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.005,0.003,0.07,10), matW(C_BLUE_DK));
+  rod.position.y = ay + 0.055; rod.castShadow = true; g.add(rod);
+
+  // 金球
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.018,24,24), matM(C_GOLD,0.18));
+  ball.position.y = ay + 0.093; ball.castShadow = true; g.add(ball);
+
+  // 高光
+  const hl = new THREE.Mesh(new THREE.SphereGeometry(0.005,8,8), matG(0xFFF5A0));
+  hl.position.set(-0.003, ay+0.099, 0.004); g.add(hl);
+
+  return g;
+}
+
+// ===================================================================
+// 蝴蝶结
+// ===================================================================
+function buildBow() {
+  const g = new THREE.Group();
+  for (let s of [-1,1]) {
+    const bow = new THREE.Mesh(new THREE.SphereGeometry(0.018,12,12), matW(C_BLUE_DK,0.28));
+    bow.scale.set(1,1.5,0.6);
+    bow.position.set(s*0.022, 0, 0);
+    bow.rotation.y = s*0.26;
+    bow.castShadow = true;
+    g.add(bow);
+  }
+  const ctr = new THREE.Mesh(new THREE.SphereGeometry(0.012,10,10), matW(C_BLUE_DK,0.28));
+  ctr.castShadow = true; g.add(ctr);
+  return g;
+}
+
+// ===================================================================
+// 机械臂
+// ===================================================================
+function buildArms() {
+  const g = new THREE.Group();
+  for (let s of [-1,1]) {
+    const a = new THREE.Group();
+    const mx = 0.008, my = BH*0.55, mz = s*(BW/2-0.012);
+    a.position.set(mx, my, mz);
+    a.rotation.y = Math.PI/2;
+    a.rotation.z = s*0.42;
+
+    // 肩
+    const sh = new THREE.Mesh(new THREE.CylinderGeometry(0.024,0.024,0.016,20), matW(0x60636b,0.35));
+    sh.castShadow = true; a.add(sh);
+
+    // 上臂
+    const ua = new THREE.Mesh(new THREE.CylinderGeometry(0.014,0.011,0.070,14), matW(0x60636b,0.35));
+    ua.position.y = 0.045; ua.rotation.x = -0.35; ua.castShadow = true; a.add(ua);
+
+    // 肘球
+    const el = new THREE.Mesh(new THREE.SphereGeometry(0.017,12,12), matW(0x60636b,0.35));
+    el.position.y = 0.082; el.rotation.x = -0.35; a.add(el);
+
+    // 前臂组
+    const fg = new THREE.Group();
+    fg.position.y = 0.082; fg.rotation.x = -0.35;
+    const fa = new THREE.Mesh(new THREE.CylinderGeometry(0.011,0.008,0.055,10), matW(0x4a4c52,0.35));
+    fa.position.y = 0.035; fa.rotation.x = 0.52; fg.add(fa);
+    const wr = new THREE.Mesh(new THREE.SphereGeometry(0.013,8,8), matW(0x4a4c52,0.35));
+    wr.position.y = 0.065; wr.rotation.x = 0.52; fg.add(wr);
+    a.add(fg);
+
+    // 爪
+    const cg = new THREE.Group();
+    cg.position.y = 0.082; cg.rotation.x = -0.35;
+    const cb = new THREE.Mesh(new THREE.SphereGeometry(0.015,12,12), matW(C_RED,0.28));
+    cb.position.y = 0.070; cb.rotation.x = 0.52; cg.add(cb);
+    for (let d of [-1,0,1]) {
+      const f = new THREE.Mesh(new THREE.CylinderGeometry(0.004,0.0015,0.025,8), matW(C_RED,0.28));
+      f.position.y = 0.082; f.rotation.z = d*0.26; f.rotation.x = d*0.17; cg.add(f);
+    }
+    a.add(cg);
+    g.add(a);
+  }
+  return g;
+}
+
+// ===================================================================
+// 扬声器格栅 + 传感器 + 麦克风
+// ===================================================================
+function buildDetails() {
+  const g = new THREE.Group();
+
+  // 正面 ToF 传感器
+  const tof = new THREE.Mesh(new THREE.CylinderGeometry(0.006,0.004,0.010,10), matW(0x40444a));
+  tof.position.set(BW/2+0.012, BH*0.20, 0); tof.rotation.z = Math.PI/2;
+  g.add(tof);
+
+  // 侧面传感器
+  const ds = BD/BW;
+  for (let ang of [-48,-132]) {
+    const rad = THREE.MathUtils.degToRad(ang);
+    g.add(new THREE.Mesh(
+      new THREE.CylinderGeometry(0.006,0.004,0.010,10),
+      matW(0x40444a)
+    ));
+  }
+
+  return g;
+}
+
+// ===================================================================
+// 组装
+// ===================================================================
+const coco = new THREE.Group();
+scene.add(coco);
+
+coco.add(buildChassis());
+coco.add(buildTracks());
+
+const bodyG = buildBody();
+bodyG.position.set(0, BZ, 0);
+coco.add(bodyG);
+
+const screenG = buildScreen();
+screenG.position.set(BW/2-0.016, BZ + BH*0.38, 0);
+screenG.rotation.x = -THREE.MathUtils.degToRad(TILT);
+screenG.rotation.y = Math.PI/2;
+coco.add(screenG);
+
+const headG = buildHead();
+headG.position.set(0, BZ, 0);
+coco.add(headG);
+
+const antG = buildAntenna();
+antG.position.set(0, BZ, -0.012);
+coco.add(antG);
+
+const bowG = buildBow();
+bowG.position.set(BW/2-0.030, BZ + BH*0.58, 0);
+coco.add(bowG);
+
+coco.add(buildDetails());
+
+const armsG = buildArms();
+armsG.position.y = BZ;
+coco.add(armsG);
+
+// 底盘底部对齐地面
+// chassis底部在y=0, 机身底部在y=BZ=0.060
+// 不需要额外偏移
+
+// ===================================================================
+// UI
+// ===================================================================
+let showArms = true, wire = false, autoR = false;
+
+document.getElementById('btnArms').onclick = function() {
+  showArms = !showArms;
+  armsG.visible = showArms;
+  this.classList.toggle('on', showArms);
+};
+document.getElementById('btnWire').onclick = function() {
+  wire = !wire;
+  this.classList.toggle('on', wire);
+  coco.traverse(c => {
+    if (c.isMesh && c.material.color && c.material.color.getHex()===C_WHITE) {
+      c.material.wireframe = wire;
+      c.material.opacity = wire ? 0.5 : 1;
+      c.material.transparent = wire;
+    }
+  });
+};
+document.getElementById('btnAuto').onclick = function() {
+  autoR = !autoR;
+  ctrl.autoRotate = autoR;
+  ctrl.autoRotateSpeed = 1.5;
+  this.classList.toggle('on', autoR);
+};
+document.getElementById('btnReset').onclick = () => {
+  camera.position.set(0.9, 0.55, 1.5);
+  ctrl.target.set(0, 0.40, 0);
+  ctrl.update();
+};
+
+// 键盘
+onkeydown = e => {
+  switch(e.key.toLowerCase()) {
+    case 'a': document.getElementById('btnArms').click(); break;
+    case 'w': document.getElementById('btnWire').click(); break;
+    case 'r': document.getElementById('btnAuto').click(); break;
+    case 'f': document.getElementById('btnReset').click(); break;
+  }
+};
+
+// 呼吸灯
+function loop() {
+  requestAnimationFrame(loop);
+  ctrl.update();
+
+  // 屏幕呼吸
+  const disp = screenG.children.find(c => c.material.emissiveIntensity!==undefined);
+  if (disp) {
+    const t = performance.now()*0.001;
+    disp.material.emissiveIntensity = 0.18 + Math.sin(t*1.4)*0.07;
+  }
+
+  renderer.render(scene, camera);
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// 启动
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('err').style.display = 'none';
+  loop();
+});
+
+// 如果 DOM 已加载，直接启动
+if (document.readyState !== 'loading') {
+  document.getElementById('err').style.display = 'none';
+  loop();
+}
+
+console.log('🤖 Coco v5 3D — 准备就绪');
+</script>
+</body>
+</html>

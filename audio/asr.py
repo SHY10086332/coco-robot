@@ -59,7 +59,7 @@ class VADDetector:
     这不是深度学习方案，但在店里环境（相对安静）足够用。
     """
 
-    def __init__(self, threshold: float = 0.02,
+    def __init__(self, threshold: float = 0.002,
                  silence_blocks: int = 30,
                  speech_blocks: int = 5):
         """
@@ -127,17 +127,20 @@ class ASREngine:
                  model_name: str = "tiny",
                  language: str = "zh",
                  use_whisper: bool = True,
-                 debug_keyboard: bool = False):
+                 debug_keyboard: bool = False,
+                 mic_device: int = None):
         """
         Args:
             model_name: Whisper模型大小 "tiny"/"base"/"small"
             language: 识别语言
             use_whisper: True=加载Whisper, False=仅键盘模式
             debug_keyboard: True=用键盘输入代替麦克风
+            mic_device: 麦克风设备号 (None=系统默认)
         """
         self.model_name = model_name
         self.language = language
         self.debug_keyboard = debug_keyboard
+        self.mic_device = mic_device
 
         self._model = None
         self._vad = VADDetector()
@@ -255,6 +258,7 @@ class ASREngine:
                 dtype=DTYPE,
                 blocksize=int(SAMPLE_RATE * BLOCK_DURATION),
                 callback=audio_callback,
+                device=self.mic_device,
             ):
                 done.wait(timeout=timeout)
         except sd.CallbackStop:

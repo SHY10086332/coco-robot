@@ -43,8 +43,8 @@ WAKE_WORD = "你好coco"          # 唤醒词
 WAKE_WORD_SENSITIVITY = 0.5    # Porcupine 灵敏度 (0~1)
 
 # Whisper 模型: "tiny" | "base" | "small" | "medium" | "large"
-# tiny=39M参数, base=74M, 树莓派5推荐 tiny 或 base
-WHISPER_MODEL = "tiny"
+# tiny=39M参数, base=74M, Orange Pi 5 推荐 tiny 或 base
+WHISPER_MODEL = "base"
 WHISPER_LANGUAGE = "zh"
 
 
@@ -53,7 +53,7 @@ WHISPER_LANGUAGE = "zh"
 # ============================================================
 
 OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_MODEL = "qwen2.5:0.5b"              # 0.5B 够树莓派跑，换 1.5B 也行
+OLLAMA_MODEL = "qwen2.5:1.5b"              # 1.5B，Orange Pi 5 可跑，回答质量比0.5B好很多
 OLLAMA_TIMEOUT = 30.0                       # 推理超时 (s)
 
 CHROMA_DB_PATH = "data/chroma_db"
@@ -92,7 +92,7 @@ CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CAMERA_FPS = 10
 
-YOLO_MODEL = "yolov8n.pt"                   # nano 版本，树莓派可跑
+YOLO_MODEL = "yolov8n.pt"                   # nano 版本，Orange Pi / 树莓派可跑
 YOLO_CONFIDENCE = 0.5
 
 # 人脸检测（用于判断"有人在看屏幕"）
@@ -131,21 +131,52 @@ MQTT_KEEPALIVE = 60
 
 
 # ============================================================
-# GPIO 引脚定义 (树莓派5 BCM编号)
+# GPIO 引脚定义 (Orange Pi 5, RK3588)
 # ============================================================
 
-PIN_MOTOR_LEFT_PWM = 12                     # 左电机 PWM
-PIN_MOTOR_LEFT_IN1 = 5
-PIN_MOTOR_LEFT_IN2 = 6
-PIN_MOTOR_RIGHT_PWM = 13                    # 右电机 PWM
-PIN_MOTOR_RIGHT_IN1 = 7
-PIN_MOTOR_RIGHT_IN2 = 8
+# 格式: (gpiochip, line)
+# 例: (4, 18) → /dev/gpiochip4 line 18 → 物理引脚7 = GPIO4_C2
+# 实际接线时请对照 Orange Pi 5 40pin 引脚图调整
+PIN_MOTOR_LEFT_PWM  = (4, 18)    # 物理引脚7  = GPIO4_C2
+PIN_MOTOR_LEFT_IN1  = (4, 19)    # 物理引脚11 = GPIO4_C3
+PIN_MOTOR_LEFT_IN2  = (4, 21)    # 物理引脚12 = GPIO4_C5
+PIN_MOTOR_RIGHT_PWM = (4, 22)    # 物理引脚13 = GPIO4_C6
+PIN_MOTOR_RIGHT_IN1 = (4, 8)     # 物理引脚16 = GPIO4_B0
+PIN_MOTOR_RIGHT_IN2 = (4, 10)    # 物理引脚18 = GPIO4_B2
 
-PIN_LED_STRIP = 18                          # LED 灯带 PWM
-PIN_ANTENNA_LED = 23                        # 天线 LED
+PIN_LED_STRIP       = (1, 27)    # 物理引脚22 = GPIO1_D3
+PIN_ANTENNA_LED     = (4, 11)    # 物理引脚15 = GPIO4_B3
 
-PIN_ULTRASONIC_TRIG = 17
-PIN_ULTRASONIC_ECHO = 27
+PIN_ULTRASONIC_TRIG = (0, 14)    # 物理引脚8  = GPIO0_C6
+PIN_ULTRASONIC_ECHO = (0, 15)    # 物理引脚10 = GPIO0_C7
+
+PIN_SERVO_PAN = (1, 28)          # 物理引脚24 = GPIO1_D4（头水平旋转舵机）
+
+
+# ============================================================
+# 舵机参数（SG90，头部云台）
+# ============================================================
+
+SERVO_MIN_ANGLE = 0              # 最小角度
+SERVO_MAX_ANGLE = 180            # 最大角度
+SERVO_CENTER_ANGLE = 90          # 中心角度（正对前方）
+SERVO_MIN_PULSE_US = 500         # 0° 对应脉宽 (μs)
+SERVO_MAX_PULSE_US = 2500        # 180° 对应脉宽 (μs)
+SERVO_SPEED_DEG_PER_S = 300      # 舵机转动速度 (°/s)，SG90 约 0.12s/60°
+
+
+# ============================================================
+# 视觉追踪参数
+# ============================================================
+
+TRACKER_ANGLE_P_GAIN = 0.08      # 水平偏差 → 舵机角度的 P 增益
+TRACKER_HEAD_RANGE = 30          # 头可转范围 ±30°（在此范围内只转头）
+TRACKER_CHASSIS_W_GAIN = 0.6     # 超出头范围后，底盘的角速度增益
+TRACKER_PERSON_MIN_AREA = 3000   # 目标框最小面积（低于此值 → 前进靠近）
+TRACKER_PERSON_MAX_AREA = 25000  # 目标框最大面积（超过此值 → 后退）
+TRACKER_FOLLOW_SPEED = 0.15      # 跟随线速度 (m/s)
+TRACKER_LOST_TIMEOUT = 3.0       # 丢失目标后几秒开始扫描搜索
+TRACKER_SWEEP_SPEED = 60         # 扫描时舵机扫速 (°/s)
 
 
 # ============================================================

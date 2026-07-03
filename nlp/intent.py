@@ -118,10 +118,11 @@ class RuleIntentClassifier:
 class LLMIntentClassifier:
     """用 LLM 做意图分类，更准确但依赖 Ollama"""
 
-    def __init__(self, ollama_host: str = "http://localhost:11434",
-                 model: str = "qwen2.5:0.5b"):
-        self.host = ollama_host
-        self.model = model
+    def __init__(self, ollama_host: str = None,
+                 model: str = None):
+        from config import OLLAMA_HOST, OLLAMA_MODEL
+        self.host = ollama_host or OLLAMA_HOST
+        self.model = model or OLLAMA_MODEL
 
     def classify(self, text: str) -> IntentType:
         """用 LLM 做意图分类"""
@@ -167,8 +168,12 @@ class IntentParser:
     """
 
     def __init__(self, use_llm: bool = False,
-                 ollama_host: str = "http://localhost:11434",
-                 ollama_model: str = "qwen2.5:0.5b"):
+                 ollama_host: str = None,
+                 ollama_model: str = None):
+        from config import OLLAMA_HOST, OLLAMA_MODEL
+        ollama_host = ollama_host or OLLAMA_HOST
+        ollama_model = ollama_model or OLLAMA_MODEL
+
         self.rule_classifier = RuleIntentClassifier()
         self.llm_classifier = None
         self.use_llm = use_llm
