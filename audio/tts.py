@@ -1,159 +1,239 @@
 """
-Coco 导购机器人 — 语音合成 (TTS)
+Coco -- TTS
 
-使用 Microsoft Edge TTS（免费、中文效果好、无需模型下载）。
-依赖: pip install edge-tts
-
-音色选择：
-- zh-CN-XiaoyouNeural   童声（可爱） ← 默认，熊出没Coco风格
-- zh-CN-XiaoxiaoNeural  女声（活泼）
-- zh-CN-XiaoyiNeural    女声（温柔）
-- zh-CN-YunxiNeural     男声（稳重）
+edge-tts / cosyvoice / system
 """
 
 import asyncio
-import io
 import logging
 import os
-import tempfile
 import subprocess
 import sys
-from typing import Optional
+import tempfile
+import threading
+from typing import Optional, Dict, List
 
 log = logging.getLogger("coco.tts")
 
-# 检查 edge-tts 是否可用
 try:
     import edge_tts
     EDGE_TTS_AVAILABLE = True
 except ImportError:
     EDGE_TTS_AVAILABLE = False
-    log.warning("edge-tts 未安装，使用系统 TTS 作为兜底")
+    log.warning("edge-tts not installed, fallback to system TTS")
+
+from config import (
+    TTS_ENGINE, TTS_VOICE, TTS_SPEED, TTS_PITCH, TTS_PRESET,
+    COSY_MODEL_CACHE, COSY_MODEL_TYPE, COSY_REF_WAV, COSY_REF_TEXT,
+)
+
+VOICE_PRESETS: Dict[str, Dict] = {
+    "coco_child": {
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "speed": "+15%",
+        "pitch": "+35Hz",
+        "desc": "Coco child voice",
+    },
+    "xiaoxiao": {
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "speed": "+10%",
+        "pitch": "+15Hz",
+        "desc": "Lively female",
+    },
+    "xiaoyi": {
+        "voice": "zh-CN-YunyiNeural",
+        "speed": "+5%",
+        "pitch": "+0Hz",
+        "desc": "Gentle female",
+    },
+    "yunxi": {
+        "voice": "zh-CN-YunxiNeural",
+        "speed": "+0%",
+        "pitch": "+0Hz",
+        "desc": "Steady male",
+    },
+    "xiaoyou": {
+        "voice": "zh-CN-XiaoyouNeural",
+        "speed": "+10%",
+        "pitch": "+10Hz",
+        "desc": "Microsoft child voice",
+    },
+    "fast_coco": {
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "speed": "+25%",
+        "pitch": "+45Hz",
+        "desc": "Fast Coco",
+    },
+    "slow_gentle": {
+        "voice": "zh-CN-YunyiNeural",
+        "speed": "-10%",
+        "pitch": "-5Hz",
+        "desc": "Slow gentle",
+    },
+}
 
 
 class TTSEngine:
-    """语音合成引擎"""
+    """TTS engine -- edge-tts / cosyvoice / system"""
 
-    def __init__(self, voice: str = "zh-CN-XiaoxiaoNeural",
-                 speed: str = "+10%",
-                 pitch: str = "+15Hz"):
-        """
-        Args:
-            voice: 音色名称 (zh-CN-XiaoxiaoNeural=活泼女声)
-            speed: 语速调节，如 "+10%" 或 "-5%"
-            pitch: 音调调节，如 "+15Hz" 偏高模拟童声
-        """
-        self.voice = voice
-        self.speed = speed
+    def __init__(self, preset: str = None, engine: str = None):
+        self._engine = engine or TTS_ENGINE
+        self._current_preset = preset or TTS_PRESET
+        self._cosy = None
+
+        # edge-tts params
+        if self._current_preset in VOICE_PRESETS:
+            p = VOICE_PRESETS[self._current_preset]
+            self.voice = p["voice"]
+            self.speed = p["speed"]
+            self.pitch = p["pitch"]
+        else:
+            self.voice = TTS_VOICE
+            self.speed = TTS_SPEED
+            self.pitch = TTS_PITCH
+
+        log.info(f"TTS engine: {self._engine}")
+
+    # ---- lazy cosyvoice init ----
+
+    def _get_cosy(self):
+        if self._cosy is not None:
+            return self._cosy
+        try:
+            from .cosy_tts import CosyVoiceTTS, COSY_AVAILABLE as _CA
+            if not _CA:
+                log.error("CosyVoice not available")
+                return None
+            self._cosy = CosyVoiceTTS(
+                model_cache_dir=COSY_MODEL_CACHE,
+                model_type=COSY_MODEL_TYPE,
+            )
+            if not self._cosy.load():
+                log.error("CosyVoice load failed")
+                self._cosy = None
+                return None
+            # set reference voice
+            ref_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), COSY_REF_WAV)
+            if os.path.exists(ref_path):
+                self._cosy.set_reference_voice(ref_path, COSY_REF_TEXT)
+            return self._cosy
+        except Exception as e:
+            log.error(f"CosyVoice init failed: {e}")
+            return None
+
+    # ---- voice presets (edge-tts only) ----
+
+    def set_preset(self, name: str) -> bool:
+        if name not in VOICE_PRESETS:
+            log.warning(f"Unknown preset '{name}'. Available: {list(VOICE_PRESETS.keys())}")
+            return False
+        p = VOICE_PRESETS[name]
+        self.voice = p["voice"]
+        self.speed = p["speed"]
+        self.pitch = p["pitch"]
+        self._current_preset = name
+        log.info(f"TTS preset: {name}")
+        return True
+
+    def get_preset(self) -> str:
+        return self._current_preset
+
+    def set_pitch(self, pitch: str):
         self.pitch = pitch
 
+    def set_speed(self, speed: str):
+        self.speed = speed
+
+    @staticmethod
+    def list_presets() -> List[Dict]:
+        result = []
+        for name, p in VOICE_PRESETS.items():
+            result.append({
+                "name": name,
+                "voice": p["voice"],
+                "speed": p["speed"],
+                "pitch": p["pitch"],
+                "desc": p["desc"],
+            })
+        return result
+
+    # ---- speak ----
+
     def speak(self, text: str, block: bool = True) -> bool:
-        """
-        播报文本。
-
-        Args:
-            text: 要播报的文本
-            block: True=阻塞等待播完, False=后台播放
-
-        Returns:
-            是否成功开始播放
-        """
         if not text or not text.strip():
             return False
-
         text = text.strip()
-        log.info(f"TTS: {text[:60]}...")
+        log.info(f"TTS [{self._engine}]: {text[:60]}...")
 
-        if EDGE_TTS_AVAILABLE:
+        if self._engine == "cosyvoice":
+            return self._speak_cosy(text, block)
+        elif EDGE_TTS_AVAILABLE:
             return self._speak_edge(text, block)
         else:
-            return self._speak_fallback(text, block)
+            return self._speak_system(text, block)
+
+    def _speak_cosy(self, text: str, block: bool) -> bool:
+        cosy = self._get_cosy()
+        if cosy is None:
+            log.warning("CosyVoice unavailable, fallback to edge-tts")
+            if EDGE_TTS_AVAILABLE:
+                return self._speak_edge(text, block)
+            return self._speak_system(text, block)
+
+        return cosy.speak(text, block=block)
 
     def _speak_edge(self, text: str, block: bool) -> bool:
-        """用 edge-tts 播放"""
         if block:
-            # 同步：直接用 asyncio.run()
             try:
-                return asyncio.run(self._edge_speak(text))
+                return asyncio.run(self._edge_synth(text))
             except Exception as e:
-                log.error(f"TTS 异常: {e}")
+                log.error(f"TTS error: {e}")
                 return False
         else:
-            # 异步：后台线程
-            import threading
-
-            def _bg():
-                try:
-                    asyncio.run(self._edge_speak(text))
-                except Exception:
-                    pass
-
-            t = threading.Thread(target=_bg, daemon=True)
-            t.start()
+            threading.Thread(target=lambda: asyncio.run(self._edge_synth(text)), daemon=True).start()
             return True
 
-    async def _edge_speak(self, text: str, retry: int = 1) -> bool:
-        """edge-tts 异步播报（失败自动重试）"""
+    async def _edge_synth(self, text: str, retry: int = 1) -> bool:
         import asyncio as aio
-
         last_error = None
         for attempt in range(retry + 1):
             try:
                 if attempt > 0:
-                    await aio.sleep(0.5)  # 重试前等一会
-
+                    await aio.sleep(0.5)
                 communicate = edge_tts.Communicate(
-                    text=text,
-                    voice=self.voice,
-                    rate=self.speed,
+                    text=text, voice=self.voice,
+                    rate=self.speed, pitch=self.pitch,
                 )
-
-                # 保存到临时文件
                 with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
                     tmp_path = f.name
-
                 await communicate.save(tmp_path)
-                break  # 成功，跳出重试循环
-
+                break
             except Exception as e:
                 last_error = e
                 if attempt < retry:
-                    log.warning(f"TTS 第{attempt+1}次失败，重试中...")
-                continue
+                    log.warning(f"TTS retry {attempt+1}...")
         else:
-            # 所有重试都失败
-            log.error(f"TTS 播报失败(重试{retry}次): {last_error}")
+            log.error(f"TTS failed after {retry} retries: {last_error}")
             return False
 
-        # 播放音频
-        try:
-            if sys.platform == "win32":
-                os.system(f'start /min "" "{tmp_path}"')
-            else:
-                subprocess.run(["mpg123", "-q", tmp_path], check=False)
-        except Exception as e:
-            log.error(f"播放失败: {e}")
+        if sys.platform == "win32":
+            os.system(f'start /min "" "{tmp_path}"')
+        else:
+            subprocess.run(["mpg123", "-q", tmp_path], check=False)
 
-        # 延迟删除临时文件
-        import threading
         def _clean():
             import time
-            time.sleep(5)
+            time.sleep(8)
             try:
                 os.unlink(tmp_path)
             except Exception:
                 pass
         threading.Thread(target=_clean, daemon=True).start()
-
         return True
 
-    def _speak_fallback(self, text: str, block: bool) -> bool:
-        """系统 TTS 兜底"""
+    def _speak_system(self, text: str, block: bool) -> bool:
         if sys.platform == "win32":
             try:
-                import winsound
-                # Windows 自带语音
-                import subprocess
                 subprocess.run([
                     "powershell", "-Command",
                     f'Add-Type -AssemblyName System.Speech; '
@@ -162,42 +242,37 @@ class TTSEngine:
                 return True
             except Exception:
                 pass
-
-        # 实在不行就打印
-        print(f"[Coco说]: {text}")
+        print(f"[Coco]: {text}")
         return True
 
     def speak_sync(self, text: str):
-        """同步播报（阻塞直到说完）"""
         self.speak(text, block=True)
 
     def speak_async(self, text: str):
-        """异步播报（立即返回，后台播放）"""
         self.speak(text, block=False)
 
 
 # ============================================================
-# 自测
-# ============================================================
-
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO,
-                        format="%(levelname)s: %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     print("=" * 50)
-    print("TTS 语音合成自测")
+    print(f"TTS self-test (engine={TTS_ENGINE})")
     print("=" * 50)
 
     tts = TTSEngine()
 
-    test_texts = [
-        "你好！我是 Coco，你的智能导购小帮手～",
-        "可口可乐一瓶三块五，在A区一号货架，需要我带你去吗？",
-    ]
+    if TTS_ENGINE == "edge-tts":
+        print("\nVoice presets:")
+        for p in tts.list_presets():
+            print(f"  {p['name']:15s} {p['desc']}")
 
-    for text in test_texts:
-        print(f"\n播报: {text}")
-        tts.speak(text)
-        print("  播报完成")
+        for preset in ["coco_child", "xiaoxiao", "yunxi"]:
+            print(f"\nSwitching to: {preset}")
+            tts.set_preset(preset)
+            tts.speak("nihao, wo shi Coco!")
 
-    print("\n自测完成！")
+    elif TTS_ENGINE == "cosyvoice":
+        tts.speak("nihao, wo shi Coco, huanying lai dao women de shangdian!")
+
+    print("\nDone!")

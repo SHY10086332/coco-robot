@@ -497,7 +497,8 @@ def main():
         web_main()
     elif args.voice:
         from audio.audio_pipeline import AudioPipeline
-        pipeline = AudioPipeline(debug_keyboard=DEBUG)
+        from config import TTS_PRESET
+        pipeline = AudioPipeline(debug_keyboard=DEBUG, tts_preset=TTS_PRESET)
         pipeline.run()
     elif args.chat:
         run_chat()

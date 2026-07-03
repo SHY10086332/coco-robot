@@ -41,19 +41,19 @@ class AudioPipeline:
 
     def __init__(self,
                  whisper_model: str = "tiny",
-                 tts_voice: str = "zh-CN-XiaoyouNeural",
+                 tts_preset: str = "coco_child",
                  debug_keyboard: bool = True):
         """
         Args:
             whisper_model: Whisper 模型大小
-            tts_voice: TTS 音色
+            tts_preset: TTS 语音预设 (coco_child / xiaoxiao / yunxi ...)
             debug_keyboard: True=键盘模拟, False=真实麦克风
         """
         self.asr = ASREngine(
             model_name=whisper_model,
             debug_keyboard=debug_keyboard,
         )
-        self.tts = TTSEngine(voice=tts_voice)
+        self.tts = TTSEngine(preset=tts_preset)
         self.debug_keyboard = debug_keyboard
 
         # 对话管理器（延迟加载）
@@ -144,6 +144,14 @@ class AudioPipeline:
             print("\n\nCoco 下班啦，再见！👋")
         finally:
             self._running = False
+
+    def set_voice(self, preset: str) -> bool:
+        """切换 TTS 语音预设"""
+        return self.tts.set_preset(preset)
+
+    def list_voices(self):
+        """列出所有可用语音"""
+        return self.tts.list_presets()
 
     def stop(self):
         """停止对话循环"""
