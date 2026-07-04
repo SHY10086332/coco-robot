@@ -65,20 +65,20 @@ doc.add_paragraph()
 doc.add_paragraph()
 title = doc.add_paragraph()
 title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-run = title.add_run('Coco 导购机器人\n硬件采购清单')
+run = title.add_run('Coco 导购机器人\n硬件采购清单 v6')
 run.bold = True
 run.font.size = Pt(30)
 run.font.color.rgb = RGBColor(0x2C, 0x5F, 0x8A)
 
 sub = doc.add_paragraph()
 sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-run = sub.add_run('\nv5 立式机型 — 总高 900mm，屏幕28°仰角\n履带底盘 + 200mm圆屏 + 本地AI语音对话')
+run = sub.add_run('\nv6 立式可转头机型 — 总高 900mm，屏幕28°仰角\nSG90舵机驱动头部 ±50°旋转 + 视觉人体追踪')
 run.font.size = Pt(13)
 run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
 info = doc.add_paragraph()
 info.alignment = WD_ALIGN_PARAGRAPH.CENTER
-run = info.add_run('\n\n文档版本: 2.1\n日期: 2026-07-04 (新增视觉人体追踪)\n模型文件: design/coco_model.scad\n屏幕组件: design/screen_mount.scad')
+run = info.add_run('\n\n文档版本: 3.0 (v6)\n日期: 2026-07-04 (可转头追踪 + SG90舵机)\n模型文件: design/coco_model.scad\n屏幕组件: design/screen_mount.scad')
 run.font.size = Pt(10)
 run.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
 

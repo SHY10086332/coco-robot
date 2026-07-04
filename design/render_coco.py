@@ -1,6 +1,6 @@
 """
-Coco 导购机器人 — 2D 概念效果图 v5 (立式)
-总高 ~900mm, 200mm圆屏, 履带底盘, 立式导购
+Coco 导购机器人 — 2D 概念效果图 v6 (可转头)
+总高 ~900mm, 200mm圆屏, 履带底盘, 立式导购, SG90舵机转头追踪
 """
 
 import math
@@ -417,7 +417,7 @@ try:
 except Exception:
     font_lg = font_md = font_sm = ImageFont.load_default()
 
-title = "Coco v5 立式导购机器人"
+title = "Coco v6 立式导购机器人 (可转头追踪)"
 tb = draw.textbbox((0, 0), title, font=font_lg)
 tw = tb[2] - tb[0]
 draw.text((cx - tw // 2, 50), title, fill=(255, 255, 255, 230), font=font_lg)
@@ -433,7 +433,7 @@ for label, lx, ly in specs:
     draw.ellipse([lx - 4, ly - 4, lx + 4, ly + 4], fill=(255, 255, 255, 200))
     draw.text((lx + 2, ly - 28), label, fill=(255, 255, 255, 170), font=font_sm)
 
-footer = "v5 Floor-Standing  ·  8\" Round Screen  ·  Tracked Chassis  ·  Whisper + Qwen2.5 + CosyVoice"
+footer = "v6 Floor-Standing  ·  8\" Round Screen  ·  Pan-Tilt Head (±50°)  ·  SG90 Servo Tracking  ·  Whisper + Qwen2.5 + CosyVoice"
 fb = draw.textbbox((0, 0), footer, font=font_sm)
 fw = fb[2] - fb[0]
 draw.text((cx - fw // 2, H - 55), footer, fill=(255, 255, 255, 90), font=font_sm)
