@@ -1,14 +1,16 @@
 """
-Coco 导购机器人 — 视觉人体追踪器
+Coco 导购机器人 — 视觉人体追踪器 (v6.2 双轴云台)
 
-通过 YOLO 检测结果追踪顾客位置，协调头部舵机和履带底盘：
+通过 YOLO 检测结果追踪顾客位置，协调双轴云台(pan+tilt)和履带底盘：
 - 人在画面中间 ±30° → 只转头，底盘不动
 - 人超出头可转范围 → 头转到极限 + 底盘缓慢转
+- 垂直方向: 检测人脸的纵向位置 → 调整屏幕仰角(TILT_MIN~TILT_MAX)
+- 无人时: 屏幕降到最低仰角(5°)"低头"待机
 - 人太远（框小）→ 前进靠近
 - 人太近（框大）→ 后退/停止
-- 目标丢失 → 头扫瞄搜索
+- 目标丢失 → pan扫瞄搜索, tilt降到最低
 
-需要配合 VisionPipeline（YOLO 检测）和 Servo（头部舵机）。
+需要配合 VisionPipeline（YOLO 检测）和 Servo ×2（pan + tilt舵机）。
 底盘指令以 (v, w) 形式输出，可直接送到 MotorController.set_velocity()。
 """
 
@@ -24,10 +26,13 @@ log = logging.getLogger("coco.tracker")
 from config import (
     CAMERA_WIDTH, CAMERA_HEIGHT,
     SERVO_CENTER_ANGLE,
-    TRACKER_ANGLE_P_GAIN, TRACKER_HEAD_RANGE,
-    TRACKER_CHASSIS_W_GAIN, TRACKER_FOLLOW_SPEED,
+    TRACKER_ANGLE_P_GAIN, TRACKER_TILT_P_GAIN,
+    TRACKER_HEAD_RANGE, TRACKER_CHASSIS_W_GAIN,
+    TRACKER_FOLLOW_SPEED,
     TRACKER_PERSON_MIN_AREA, TRACKER_PERSON_MAX_AREA,
     TRACKER_LOST_TIMEOUT, TRACKER_SWEEP_SPEED,
+    TRACKER_TILT_LOST_ANGLE, TRACKER_TILT_SMOOTH,
+    TILT_MIN, TILT_MAX, TILT_SERVO_NEUTRAL, TILT_SERVO_RANGE,
 )
 from vision.detect import DetectionResult, BBox
 
@@ -96,20 +101,22 @@ class PersonTracker:
         └─────────────────────────────────────────────────┘
     """
 
-    def __init__(self, servo,  # Servo 实例
+    def __init__(self, servo_pan, servo_tilt=None,  # Servo 实例 (pan必需, tilt可选)
                  frame_width: int = CAMERA_WIDTH,
                  frame_height: int = CAMERA_HEIGHT,
                  head_range: float = TRACKER_HEAD_RANGE,
                  lost_timeout: float = TRACKER_LOST_TIMEOUT,
                  debug: bool = False):
-        self.servo = servo
+        self.servo_pan = servo_pan
+        self.servo_tilt = servo_tilt      # None = 单轴模式
         self.frame_w = frame_width
         self.frame_h = frame_height
-        self.head_range = head_range        # 头可转范围 ±度
+        self.head_range = head_range
         self.lost_timeout = lost_timeout
         self.debug = debug
 
-        self._frame_cx = frame_width / 2.0  # 画面中心 X 像素
+        self._frame_cx = frame_width / 2.0
+        self._frame_cy = frame_height / 2.0  # 画面中心 Y
 
         # 当前追踪目标
         self.target = TrackTarget()
@@ -121,10 +128,12 @@ class PersonTracker:
         # 丢失计时
         self._lost_at: Optional[float] = None
 
-        # 平滑滤波（一阶低通，减少画面抖动）
-        self._smooth_cx = 0.0               # 平滑后的目标 X
-        self._smooth_area = 0.0             # 平滑后的目标面积
-        self._smooth_alpha = 0.3            # 平滑系数（越小越稳）
+        # 平滑滤波
+        self._smooth_cx = 0.0
+        self._smooth_cy = 0.0               # 垂直方向平滑
+        self._smooth_area = 0.0
+        self._smooth_alpha = 0.3
+        self._smooth_tilt_angle = float(TILT_MIN)  # 俯仰角平滑（起始低头）
 
         # 输出
         self.cmd = ChassisCmd()
@@ -151,16 +160,21 @@ class PersonTracker:
         self._enabled = True
         self._lost_at = None
         self._state = TrackerState.SCANNING
-        self.servo.sweep(90 - 40, 90 + 40, period=2.0)
-        log.info("人体追踪已启用，开始扫瞄搜索")
+        self.servo_pan.sweep(90 - 40, 90 + 40, period=2.0)
+        # tilt: 默认仰角等待
+        if self.servo_tilt:
+            self.servo_tilt.set_angle(TILT_SERVO_NEUTRAL)
+        log.info("人体追踪已启用（双轴云台），开始扫瞄搜索")
 
     def disable(self):
         """禁用追踪，回到中位"""
         self._enabled = False
         self._state = TrackerState.IDLE
         self._lost_at = None
-        self.servo.stop_sweep()
-        self.servo.center()
+        self.servo_pan.stop_sweep()
+        self.servo_pan.center()
+        if self.servo_tilt:
+            self.servo_tilt.set_angle(TILT_SERVO_NEUTRAL)
         self.cmd = ChassisCmd()
         log.info("人体追踪已禁用")
 
@@ -177,6 +191,7 @@ class PersonTracker:
         if person is not None:
             cx, cy = person.center()
             self._smooth_cx += self._smooth_alpha * (cx - self._smooth_cx)
+            self._smooth_cy += self._smooth_alpha * (cy - self._smooth_cy)
             self._smooth_area += self._smooth_alpha * (person.area() - self._smooth_area)
 
             self.target = TrackTarget(
@@ -211,10 +226,13 @@ class PersonTracker:
             if lost_duration > self.lost_timeout and self._state != TrackerState.SCANNING:
                 log.info(f"目标丢失 {lost_duration:.1f}s，进入扫描模式")
                 self._state = TrackerState.SCANNING
-                self.servo.sweep(90 - 50, 90 + 50, period=2.5)
+                self.servo_pan.sweep(90 - 50, 90 + 50, period=2.5)
+                # 低头表示"失落"
+                if self.servo_tilt:
+                    self._set_tilt_angle(float(TILT_MIN))
         else:
             # 有目标 → 追踪
-            self.servo.stop_sweep()
+            self.servo_pan.stop_sweep()
             self._track(now)
 
         return self.cmd
@@ -243,33 +261,43 @@ class PersonTracker:
     # ================================================================
 
     def _track(self, now: float):
-        """锁定目标后的追踪控制。"""
+        """锁定目标后的追踪控制（双轴）。"""
         cx = self._smooth_cx
+        cy = self._smooth_cy
         area = self._smooth_area
 
-        # ---- 1. 水平偏差 → 舵机角度 ----
-        # 画面中心为 0，左边为负，右边为正
-        pixel_error = cx - self._frame_cx                        # 像素偏差
-        normalized_error = pixel_error / (self.frame_w / 2.0)    # 归一化 [-1, 1]
+        # ---- 1. 水平偏差 → pan 舵机角度 ----
+        pixel_error_x = cx - self._frame_cx
+        normalized_error_x = pixel_error_x / (self.frame_w / 2.0)
 
-        # P 控制：偏差 → 舵机角度偏移
-        angle_offset = normalized_error * TRACKER_ANGLE_P_GAIN * 180
-        target_servo_angle = SERVO_CENTER_ANGLE + angle_offset
-        self.servo.set_angle(target_servo_angle)
+        angle_offset = normalized_error_x * TRACKER_ANGLE_P_GAIN * 180
+        target_pan_angle = SERVO_CENTER_ANGLE + angle_offset
+        self.servo_pan.set_angle(target_pan_angle)
 
-        # ---- 2. 判断是否需要转底盘 ----
-        actual_angle = self.servo.angle
-        head_offset = actual_angle - SERVO_CENTER_ANGLE          # 头偏离中位的角度
+        # ---- 2. 垂直偏差 → tilt 舵机角度 ----
+        if self.servo_tilt:
+            # cy 越小 = 人越高（头顶在画面顶部）
+            # cy 越大 = 人越低（脚在画面底部）
+            pixel_error_y = cy - self._frame_cy
+            normalized_error_y = pixel_error_y / (self.frame_h / 2.0)
+
+            # 人偏上（cy小）→ 仰角增大（抬头看高个子/远处）
+            # 人偏下（cy大）→ 仰角减小（低头看近处/小孩）
+            tilt_angle = TILT_NEUTRAL - normalized_error_y * TRACKER_TILT_P_GAIN * 180
+            tilt_angle = max(TILT_MIN, min(TILT_MAX, tilt_angle))
+            self._set_tilt_angle(tilt_angle)
+
+        # ---- 3. 判断是否需要转底盘 ----
+        actual_angle = self.servo_pan.angle
+        head_offset = actual_angle - SERVO_CENTER_ANGLE
 
         v, w = 0.0, 0.0
 
-        # 头转到极限 → 底盘辅助转
         if abs(head_offset) > self.head_range:
-            # 超出身位范围，底盘同向旋转
             w = math.copysign(TRACKER_CHASSIS_W_GAIN, head_offset)
             self._state = TrackerState.TRACKING
 
-        # ---- 3. 距离控制（基于框面积） ----
+        # ---- 4. 距离控制（基于框面积） ----
         if area > 0:
             if area < TRACKER_PERSON_MIN_AREA:
                 v = TRACKER_FOLLOW_SPEED
@@ -278,11 +306,22 @@ class PersonTracker:
                 v = -TRACKER_FOLLOW_SPEED * 0.5
                 self._state = TrackerState.TRACKING
             else:
-                # 在合适距离范围内
                 if self._state in (TrackerState.FOLLOWING, TrackerState.SCANNING):
                     self._state = TrackerState.TRACKING
 
         self.cmd = ChassisCmd(v=v, w=w)
+
+    # ================================================================
+    # 内部 — 俯仰控制
+    # ================================================================
+
+    def _set_tilt_angle(self, target_deg: float):
+        """设置俯仰仰角，平滑过渡并转换为舵机角度。"""
+        # 一阶低通平滑
+        self._smooth_tilt_angle += TRACKER_TILT_SMOOTH * (target_deg - self._smooth_tilt_angle)
+        # 仰角 → 舵机角度 (TILT_SERVO_NEUTRAL = 28°, TILT_SERVO_RANGE = 50°)
+        servo_angle = TILT_SERVO_NEUTRAL + (self._smooth_tilt_angle - TILT_NEUTRAL) * (TILT_SERVO_RANGE / (TILT_MAX - TILT_NEUTRAL))
+        self.servo_tilt.set_angle(servo_angle)
 
     # ================================================================
     # 内部 — 距离估算
@@ -312,10 +351,11 @@ class PersonTracker:
     def status_str(self) -> str:
         """单行状态摘要，方便打 log"""
         t = self.target
+        tilt_str = f"tilt={self._smooth_tilt_angle:.0f}°" if self.servo_tilt else ""
         return (f"[{self._state.value}] "
                 f"bbox=({t.cx:.0f},{t.cy:.0f}) area={t.area:.0f} "
                 f"dist≈{t.distance_est:.2f}m "
-                f"servo={self.servo.angle:.0f}° "
+                f"pan={self.servo_pan.angle:.0f}° {tilt_str} "
                 f"cmd=(v={self.cmd.v:.2f}, w={self.cmd.w:.2f})")
 
 
@@ -335,11 +375,13 @@ if __name__ == "__main__":
     print("人体追踪器自测（模拟模式）")
     print("=" * 60)
 
-    # 创建模拟舵机
-    servo = Servo(debug=True)
-    servo.start()
+    # 创建模拟舵机（双轴）
+    servo_pan = Servo(debug=True)
+    servo_pan.start()
+    servo_tilt = Servo(debug=True)
+    servo_tilt.start()
 
-    tracker = PersonTracker(servo, debug=True, lost_timeout=0.0)  # 测试用零超时
+    tracker = PersonTracker(servo_pan, servo_tilt, debug=True, lost_timeout=0.0)
     tracker.enable()
 
     print("\n[1] 模拟检测到人在画面中央（正常距离）")
@@ -351,23 +393,25 @@ if __name__ == "__main__":
     tracker.on_detection(result)
     cmd = tracker.step()
     print(f"    目标: cx={tracker.target.cx:.0f}, area={tracker.target.area:.0f}")
-    print(f"    舵机: {tracker.servo.angle:.0f}°")
+    print(f"    pan舵机: {tracker.servo_pan.angle:.0f}°")
+    print(f"    tilt仰角: {tracker._smooth_tilt_angle:.0f}°")
     print(f"    底盘: v={cmd.v:.3f}, w={cmd.w:.3f}")
-    print(f"    预期: 头≈90°(中位), 底盘不动")
+    print(f"    预期: pan≈90°(中位), tilt≈28°(默认), 底盘不动")
 
-    print("\n[2] 模拟人在画面右边（需头右转）")
+    print("\n[2] 模拟人在画面右边 + 偏上（需头右转+抬头）")
     for _ in range(5):
-        right_person = BBox(
-            x=480, y=150, w=60, h=150,
+        right_high_person = BBox(
+            x=480, y=80, w=60, h=150,
             confidence=0.8, class_name="person"
         )
-        result = DetectionResult(objects=[right_person])
+        result = DetectionResult(objects=[right_high_person])
         tracker.on_detection(result)
         tracker.step()
-        time.sleep(0.05)  # 给舵机后台线程时间更新
-    print(f"    目标cx: {tracker.target.cx:.0f}")
-    print(f"    舵机: {tracker.servo.angle:.0f}°")
-    print(f"    预期: 头>90°(右偏)")
+        time.sleep(0.05)
+    print(f"    目标cx: {tracker.target.cx:.0f}, cy: {tracker.target.cy:.0f}")
+    print(f"    pan舵机: {tracker.servo_pan.angle:.0f}°")
+    print(f"    tilt仰角: {tracker._smooth_tilt_angle:.0f}°")
+    print(f"    预期: pan>90°(右偏), tilt>28°(抬头看高处)")
 
     print("\n[3] 模拟人太远（小框 → 前进靠近）")
     for _ in range(5):
@@ -382,17 +426,18 @@ if __name__ == "__main__":
     print(f"    底盘: v={cmd.v:.3f}, w={cmd.w:.3f}")
     print(f"    预期: v>0 (前进), 状态=FOLLOWING")
 
-    print("\n[4] 模拟目标丢失 → 扫描")
+    print("\n[4] 模拟目标丢失 → 扫描 + 低头")
     for i in range(10):
         empty_result = DetectionResult(objects=[])
         tracker.on_detection(empty_result)
         cmd = tracker.step()
         if tracker.state == TrackerState.SCANNING:
             break
-        time.sleep(0.02)  # 给时间推进
+        time.sleep(0.02)
     print(f"    状态: {tracker.state.value}")
-    print(f"    舵机: {tracker.servo.angle:.0f}° (应在扫瞄中)")
-    print(f"    预期: SCANNING, 舵机来回转动")
+    print(f"    pan舵机: {tracker.servo_pan.angle:.0f}° (应在扫瞄中)")
+    print(f"    tilt仰角: {tracker._smooth_tilt_angle:.0f}°")
+    print(f"    预期: SCANNING, tilt→{TILT_MIN}°(低头)")
 
     print("\n[5] 扫描中重新发现目标")
     found_person = BBox(
@@ -408,10 +453,11 @@ if __name__ == "__main__":
     print("\n[6] 禁用追踪")
     tracker.disable()
     print(f"    状态: {tracker.state.value}")
-    print(f"    舵机: {tracker.servo.angle:.0f}°")
+    print(f"    pan舵机: {tracker.servo_pan.angle:.0f}°")
     print(f"    预期: IDLE, 舵机回到 90°")
 
-    servo.stop()
+    servo_pan.stop()
+    servo_tilt.stop()
 
     print("\n" + "=" * 60)
     print("人体追踪器自测完成！")

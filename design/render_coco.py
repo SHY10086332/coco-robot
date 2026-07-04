@@ -1,6 +1,6 @@
 """
-Coco 导购机器人 — 2D 概念效果图 v6 (可转头)
-总高 ~900mm, 200mm圆屏, 履带底盘, 立式导购, SG90舵机转头追踪
+Coco 导购机器人 — 2D 概念效果图 v6.2 (双轴云台 pan+tilt)
+总高 ~1060mm, 200mm圆屏, 屏高~840mm, 履带底盘, SG90×2双轴追踪
 """
 
 import math
@@ -124,10 +124,10 @@ for side in [-1, 1]:
         radius=18, fill=None, outline=C_RUBBER, width=6)
     img.paste(overlay, (0, 0), overlay)
 
-# ===== 4. 机身主体 (v5: 高挑蛋形) =====
-body_top = 680
+# ===== 4. 机身主体 (v6.2: 更高, 700mm) =====
+body_top = 640
 body_w = 400
-body_h = 640
+body_h = 700
 body_cx = cx
 body_bottom = chassis_top + 20
 
@@ -171,11 +171,11 @@ def trim_ring(y, w_scale=1.0):
 
 trim_ring(body_top + 8)
 trim_ring(body_bottom - 8)
-trim_ring(body_top + 280)   # 分段标记环
-trim_ring(body_top + 490)   # 分段标记环
+trim_ring(body_top + 300)   # 分段标记环
+trim_ring(body_top + 530)   # 分段标记环
 
 # ===== 5. 蝴蝶结 =====
-bow_y = body_top + body_h * 0.55
+bow_y = body_top + body_h * 0.55 + 30  # 下移适配更高机身
 bow_cx = body_cx + body_w//2 - 55
 
 draw.ellipse([bow_cx - 50, bow_y - 32, bow_cx - 5, bow_y + 30], fill=C_BLUE_DK)
@@ -192,8 +192,8 @@ for dx in [-1, 1]:
         (bow_cx + dx * 2, bow_y + 18),
     ], fill=C_BLUE_DK)
 
-# ===== 6. 头部后壳 =====
-head_cy = body_top - 25
+# ===== 6. 头部后壳 (v6.2: pan-tilt云台) =====
+head_cy = body_top - 30
 head_rx = 220
 head_ry = 150
 
@@ -209,11 +209,11 @@ odraw.ellipse([cx - head_rx + 5, head_cy - head_ry + 10, cx - 10, head_cy + head
               fill=(195, 200, 210, 45))
 img.paste(overlay, (0, 0), overlay)
 
-# ===== 7. 屏幕面板 (28° 仰角 — 正视图呈椭圆) =====
-tilt = 28  # 倾斜角
+# ===== 7. 屏幕面板 (28°仰角, 双轴云台自适应5°~55°) =====
+tilt = 28  # 当前仰角
 vf = math.cos(math.radians(tilt))  # 纵向压缩因子 ≈ 0.883
 screen_cx = cx - 15
-screen_cy = body_top + 175
+screen_cy = body_top + 80   # v6.2: 屏幕在pan-tilt云台上, 中心高~840mm
 screen_rx = 148          # 水平半径 (不变)
 screen_ry = 148 * vf     # 垂直半径 (压缩)
 
@@ -417,13 +417,13 @@ try:
 except Exception:
     font_lg = font_md = font_sm = ImageFont.load_default()
 
-title = "Coco v6 立式导购机器人 (可转头追踪)"
+title = "Coco v6.2 立式导购机器人 (双轴云台 Pan+Tilt 自适应追踪)"
 tb = draw.textbbox((0, 0), title, font=font_lg)
 tw = tb[2] - tb[0]
 draw.text((cx - tw // 2, 50), title, fill=(255, 255, 255, 230), font=font_lg)
 
 specs = [
-    ("8寸圆屏 (28°仰角)", screen_cx - screen_rx - 30, screen_cy),
+    ("8寸圆屏 (5°~55°仰角)", screen_cx - screen_rx - 30, screen_cy),
     ("履带底盘", cx - 180, chassis_top + chassis_h // 2),
     ("麦克风", mic_cx + 50, mic_cy),
     ("天线", ant_base_x + 45, ant_top - 12),
@@ -433,7 +433,7 @@ for label, lx, ly in specs:
     draw.ellipse([lx - 4, ly - 4, lx + 4, ly + 4], fill=(255, 255, 255, 200))
     draw.text((lx + 2, ly - 28), label, fill=(255, 255, 255, 170), font=font_sm)
 
-footer = "v6 Floor-Standing  ·  8\" Round Screen  ·  Pan-Tilt Head (±50°)  ·  SG90 Servo Tracking  ·  Whisper + Qwen2.5 + CosyVoice"
+footer = "v6.2 Floor-Standing  ·  8\" Screen @ ~840mm  ·  Dual-Axis Pan-Tilt (±50° pan, 5°~55° tilt)  ·  SG90×2 Servo Tracking  ·  Whisper + Qwen2.5 + CosyVoice"
 fb = draw.textbbox((0, 0), footer, font=font_sm)
 fw = fb[2] - fb[0]
 draw.text((cx - fw // 2, H - 55), footer, fill=(255, 255, 255, 90), font=font_sm)
@@ -446,7 +446,7 @@ bot_y = chassis_top + chassis_h
 draw.line([(lx, top_y), (lx, bot_y)], fill=(255, 255, 255, 80), width=2)
 draw.line([(lx - 10, top_y), (lx + 10, top_y)], fill=(255, 255, 255, 80), width=2)
 draw.line([(lx - 10, bot_y), (lx + 10, bot_y)], fill=(255, 255, 255, 80), width=2)
-h_label = f"~900mm"
+h_label = f"~1060mm"
 draw.text((lx + 12, (top_y + bot_y)//2 - 12), h_label, fill=(255, 255, 255, 130), font=font_md)
 
 # ===== 导出 =====
