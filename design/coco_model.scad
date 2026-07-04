@@ -149,171 +149,243 @@ module pan_servo_mount() {
 }
 
 
-// ==================== 双轴头部组件 (屏幕+外壳+天线 一体俯仰) ====================
+// ==================== 完整头部模块 (刚性一体) ====================
+// 屏幕+外壳+天线为同一刚体，所有相对位置在此模块内确定
+// 头部原点 = 铰链轴位置 (pivot)
+
+module head_assembly(sr) {
+    // 屏幕面板中心 (相对头部原点)
+    screen_dx = 58;    // 屏幕在铰链前方
+    screen_dz = 42;    // 屏幕在铰链上方
+
+    // 头部后壳球心 (相对头部原点)
+    shell_cx = -5;     // 球心略偏后
+    shell_cz = 52;     // 球心在铰链上方
+    shell_r  = sr + 45;
+
+    // 天线起点 (相对头部原点)
+    ant_dx = -15;
+    ant_dz = 128;
+
+    // ═══ 屏幕外框 (倾斜安装) ═══
+    translate([screen_dx, 0, screen_dz])
+    rotate([SCREEN_TILT_BASE, 0, 0]) {
+
+        // 银色外框
+        color(C_SILVER)
+        difference() {
+            cylinder(r=sr+18, h=12);
+            translate([0,0,2]) cylinder(r=sr+6, h=12);
+        }
+
+        // 灰色台阶
+        color("#B0B4BC")
+        translate([0,0,12])
+        difference() {
+            cylinder(r=sr+6, h=4);
+            translate([0,0,-1]) cylinder(r=sr-2, h=7);
+        }
+
+        // 安装支耳 ×4
+        for(a=[45,135,225,315])
+        rotate([0,0,a])
+        translate([sr+13, 0, 0])
+        color("#A0A4AC")
+        difference() {
+            hull() {
+                cylinder(r=8, h=6);
+                translate([-12, 0, 0]) cylinder(r=5, h=6);
+            }
+            translate([0,0,-1]) cylinder(r=1.7, h=10);
+        }
+
+        // 屏幕黑色区域
+        color(C_SCREEN) translate([0,0,15]) cylinder(r=sr-1, h=1.5);
+
+        // Coco 表情
+        translate([0, 0, 16.5]) {
+            eye_r = sr * 0.24;
+            for(ex=[-1, 1]) {
+                color(C_CYAN)
+                translate([ex*sr*0.32, sr*0.08, 0])
+                scale([1, 1.25, 1])
+                cylinder(r=eye_r, h=1.2);
+
+                // 瞳孔
+                color("#0A0C12")
+                translate([ex*sr*0.32, sr*0.06, 1.2])
+                cylinder(r=eye_r*0.35, h=1);
+
+                // 高光
+                color("#FFFFFF")
+                translate([ex*sr*0.35, sr*0.03, 2.2])
+                cylinder(r=eye_r*0.1, h=0.5);
+            }
+            // 微笑
+            color(C_CYAN)
+            translate([0, -sr*0.12, 0])
+            difference() {
+                cylinder(r=sr*0.28, h=1.2);
+                translate([0, sr*0.22, -1])
+                cylinder(r=sr*0.31, h=3);
+            }
+            // 腮红
+            for(ex=[-1, 1])
+            color("#FF9999")
+            translate([ex*sr*0.54, -sr*0.16, 0])
+            scale([1, 0.6, 1])
+            cylinder(r=sr*0.09, h=1.2);
+        }
+    }
+
+    // ═══ 头部后壳 (半球壳, 包裹屏幕后方) ═══
+    translate([shell_cx, 0, shell_cz])
+    rotate([SCREEN_TILT_BASE, 0, 0])
+    difference() {
+        // 主体球
+        scale([1, 0.82, 0.92])
+        rotate([-3, 0, 0])
+        sphere(r=shell_r);
+
+        // 前面挖空 — 屏幕面板从前方嵌入
+        translate([shell_r-10, -shell_r-20, -shell_r])
+        cube([shell_r+10, (shell_r+20)*2, (shell_r+30)*2]);
+
+        // 底部切平 — 让头部和身体顶面平行
+        translate([-shell_r-10, -shell_r-20, -shell_r-10])
+        cube([(shell_r+10)*2, (shell_r+20)*2, shell_cz - screen_dz + sr + 10]);
+    }
+
+    // 外壳装饰环
+    translate([shell_cx, 0, shell_cz + sr*0.4])
+    rotate([SCREEN_TILT_BASE, 0, 0])
+    scale([1, 0.82, 0.92])
+    rotate([-3, 0, 0])
+    ring(r=shell_r+2, h=5, t=3);
+
+    // ═══ 天线 ═══
+    translate([ant_dx, -4, ant_dz])
+    rotate([SCREEN_TILT_BASE-3, 0, 0]) {
+        color(C_BLUE_DK) {
+            // 底座
+            cylinder(h=10, r1=13, r2=7);
+            translate([0,0,10]) cylinder(h=4, r1=7, r2=3.5);
+        }
+        // 杆
+        color(C_BLUE_DK)
+        translate([0,0,14])
+        cylinder(h=55, r1=3.5, r2=2);
+
+        // 金球
+        translate([0,0,69])
+        color(C_GOLD) sphere(r=15);
+
+        // 高光
+        translate([-5,5,76])
+        color("#FFF5A0") sphere(r=4);
+    }
+
+    // ═══ 铰链耳 (后下方, 连接铰链支架) ═══
+    for(sy=[-BEARING_RING_D/2-4, BEARING_RING_D/2+4])
+    translate([0, sy, 0])
+    rotate([0, 90, 0])
+    color("#B0B4BC")
+    difference() {
+        cylinder(r=7, h=14);
+        // 铰链轴孔
+        cylinder(r=3.3, h=20, center=true);
+    }
+
+    // ═══ 连杆连接球头 (tilt舵机推这里) ═══
+    translate([42, 0, -8])
+    color("#888C94")
+    sphere(r=4.5);
+}
+
+
+// ==================== Pan-Tilt 双轴云台总成 ====================
 
 module pan_tilt_head() {
-    bz=60; neck_z=bz+BODY_H; sr=SCREEN_D/2;
+    bz = 60;
+    neck_z = bz + BODY_H;      // 760 — 身体顶面
+    sr = SCREEN_D / 2;         // 100
     explode = SHOW_EXPLODED ? 80 : 0;
 
-    // 铰链参数 (与 screen_mount.scad 一致)
-    pivot_x = -BODY_TOP_W/4 + 15;
-    pivot_z = neck_z + ROTATE_PLATFORM_H + 22;
+    // 铰链轴位置 (世界坐标, 在旋转平台后部)
+    pivot_x = 48;
+    pivot_y = 0;
+    pivot_z = neck_z + ROTATE_PLATFORM_H + 24;  // 789
 
-    translate([0,0,explode])
-    rotate([0,0,PAN_ANGLE]) {
+    // Tilt舵机位置 (世界坐标, 在旋转平台前部)
+    tilt_servo_x = 78;
+    tilt_servo_y = 0;
+    tilt_servo_z = neck_z + ROTATE_PLATFORM_H + 6;  // 771
 
-        // ===== 1. Pan 旋转平台 =====
-        translate([0,0,neck_z+0.5])
+    translate([0, 0, explode])
+    rotate([0, 0, PAN_ANGLE]) {
+
+        // ═══ 1. 旋转平台 (固定pan部分) ═══
+        translate([0, 0, neck_z])
         difference() {
             union() {
-                color(C_GRAY) scale([1,BODY_D/BODY_W,1]) cylinder(r=BODY_TOP_W/2+4,h=ROTATE_PLATFORM_H);
-                color("#50555A") translate([0,0,-3]) cylinder(r=BEARING_RING_D/2+2,h=3);
+                color(C_GRAY)
+                scale([1, BODY_D/BODY_W, 1])
+                cylinder(r=BODY_TOP_W/2+2, h=ROTATE_PLATFORM_H);
+                color("#50555A")
+                translate([0, 0, -BEARING_RING_H])
+                cylinder(r=BEARING_RING_D/2+2, h=BEARING_RING_H);
             }
-            translate([0,0,-4]) cylinder(r=SHAFT_HOLE_D,h=ROTATE_PLATFORM_H+8);
+            translate([0, 0, -BEARING_RING_H-2])
+            cylinder(r=SHAFT_HOLE_D, h=ROTATE_PLATFORM_H+BEARING_RING_H+4);
         }
 
-        // ===== 2. 俯仰铰链座 (在旋转平台后部) =====
-        color("#B0B4BC")
-        for(sy=[-BEARING_RING_D/2-5, BEARING_RING_D/2+5])
-        translate([pivot_x, sy, neck_z+ROTATE_PLATFORM_H])
+        // ═══ 2. 铰链支架 (平台后部, 两个支耳) ═══
+        for(sy=[-BEARING_RING_D/2-4, BEARING_RING_D/2+4])
+        translate([pivot_x, sy, neck_z + ROTATE_PLATFORM_H])
+        color(C_GRAY)
         difference() {
             hull() {
-                translate([0,0,0]) cylinder(r=7,h=22);
-                translate([12,0,0]) cylinder(r=6,h=22);
+                cylinder(r=7, h=pivot_z - neck_z - ROTATE_PLATFORM_H);
+                translate([-12, 0, 0])
+                cylinder(r=5, h=pivot_z - neck_z - ROTATE_PLATFORM_H);
             }
-            translate([0,0,22]) rotate([0,90,0]) cylinder(r=3,h=30,center=true);
-        }
-
-        // ===== 3. Tilt 舵机 (在旋转平台前部) =====
-        tilt_servo_x = BODY_TOP_W/2 - 30;
-        color(C_SERVO_TILT)
-        translate([tilt_servo_x, -SERVO_W/2, neck_z+ROTATE_PLATFORM_H+3]) {
-            cube([SERVO_L, SERVO_W, SERVO_H-6]);
-            translate([0, -SERVO_W/2, SERVO_H-6]) cube([SERVO_L, SERVO_W+16, 1.5]);
-            translate([SERVO_L/2, SERVO_W/2, SERVO_H]) cylinder(r=SERVO_SHAFT_D/2, h=6);
-            color("#DDDDDD") translate([SERVO_L/2, SERVO_W/2, SERVO_H+6]) cylinder(r=8, h=2);
-        }
-
-        // ===== 4. 完整头部 — 屏幕+外壳+天线 (绕铰链俯仰) =====
-        translate([pivot_x, 0, pivot_z])
-        rotate([-TILT_ANGLE + SCREEN_TILT_BASE, 0, 0])
-        translate([-pivot_x, 0, -pivot_z]) {
-
-            // 头部中心 (在屏幕前方)
-            head_cx = BODY_TOP_W/2 - 12;
-            head_cz = pivot_z + 65;
-            sr = SCREEN_D/2;
-
-            // ---- 屏幕外框 ----
-            color(C_SILVER)
-            translate([head_cx, 0, head_cz])
-            rotate([SCREEN_TILT_BASE, 0, 0])
-            difference() {
-                cylinder(r=sr+18, h=10);
-                translate([0,0,-1]) cylinder(r=sr+6, h=12);
-            }
-
-            color("#B8BCC4")
-            translate([head_cx, 0, head_cz])
-            rotate([SCREEN_TILT_BASE, 0, 0])
-            translate([0,0,10])
-            difference() {
-                cylinder(r=sr+6, h=3);
-                translate([0,0,-1]) cylinder(r=sr-2, h=5);
-            }
-
-            // 安装支耳 ×4
-            for(a=[45,135,225,315])
-            rotate([0,0,a])
-            translate([head_cx, 0, head_cz])
-            rotate([SCREEN_TILT_BASE, 0, 0])
-            translate([sr+14, 0, -2])
-            color("#A0A4AC")
-            difference() {
-                hull() { cylinder(r=8,h=6); translate([-12,0,0]) cylinder(r=6,h=6); }
-                translate([0,0,-1]) cylinder(r=1.7,h=10);
-            }
-
-            // ---- 屏幕显示 ----
-            translate([head_cx, 0, head_cz])
-            rotate([SCREEN_TILT_BASE, 0, 0]) {
-                color(C_SCREEN) translate([0,0,14]) cylinder(r=sr, h=1.5);
-                eye_r=sr*0.25;
-                for(ex=[-1,1]) {
-                    color(C_CYAN) translate([ex*sr*0.32, sr*0.08, 15.5])
-                    scale([1,1.25,1]) cylinder(r=eye_r, h=1);
-                    color("#0A0C12") translate([ex*sr*0.32, sr*0.06, 16.5])
-                    cylinder(r=eye_r*0.35, h=1);
-                    color("#FFFFFF") translate([ex*sr*0.32+eye_r*0.1, sr*0.06+eye_r*0.1, 17.5])
-                    cylinder(r=eye_r*0.12, h=1);
-                }
-                color(C_CYAN) translate([0, -sr*0.14, 15.5])
-                difference() { cylinder(r=sr*0.30, h=1); translate([0,sr*0.25,-1]) cylinder(r=sr*0.33, h=3); }
-                for(ex=[-1,1]) color("#FF8880") translate([ex*sr*0.55, -sr*0.18, 15.5])
-                scale([1,0.6,1]) cylinder(r=sr*0.08, h=1);
-            }
-
-            // ---- 头部后壳 (半球壳) ----
-            shell_cx = head_cx - 8;
-            shell_cz = head_cz + sr*0.25;
-
-            color(C_WHITE)
-            translate([shell_cx, 0, shell_cz])
-            rotate([SCREEN_TILT_BASE, 0, 0])
-            difference() {
-                scale([1,0.75,0.9])
-                rotate([-5,0,0])
-                sphere(r=sr+42);
-                // 前面挖空给屏幕
-                translate([sr+20, -sr-60, -sr-40])
-                cube([sr+30, (sr+60)*2, (sr+60)*2]);
-                // 底部切平
-                translate([-sr-80, -sr-80, -sr-80])
-                cube([(sr+80)*2, (sr+80)*2, sr+35]);
-            }
-
-            // 壳体装饰环
-            color(C_BLUE)
-            translate([shell_cx, 0, shell_cz+sr*0.55])
-            rotate([SCREEN_TILT_BASE, 0, 0])
-            scale([1, 0.75, 0.9])
-            ring(r=sr+42, h=4, t=3);
-
-            // ---- 天线 ----
-            ant_x = shell_cx - 6;
-            ant_z = shell_cz + sr*0.95;
-
-            translate([ant_x, -6, ant_z])
-            rotate([SCREEN_TILT_BASE-5, 0, 0]) {
-                color(C_BLUE_DK) {
-                    cylinder(h=12, r1=14, r2=8);
-                    translate([0,0,12]) cylinder(h=5, r1=8, r2=4);
-                }
-                color(C_BLUE_DK) translate([0,0,17]) cylinder(h=60, r1=4, r2=2.5);
-                translate([0,0,77]) color(C_GOLD) sphere(r=16);
-                translate([-4,4,84]) color("#FFF5A0") sphere(r=4);
-            }
-
-            // ---- 铰链耳 (连接铰链支架) ----
-            color("#B0B4BC")
-            for(sy=[-BEARING_RING_D/2-5, BEARING_RING_D/2+5])
-            translate([pivot_x, sy, pivot_z])
+            // 铰链轴孔
+            translate([0, 0, pivot_z - neck_z - ROTATE_PLATFORM_H])
             rotate([0, 90, 0])
-            difference() {
-                cylinder(r=7, h=12);
-                cylinder(r=3.3, h=20, center=true);
-            }
+            cylinder(r=3.2, h=30, center=true);
+        }
 
-            // ---- Tilt连杆 (舵机→头部) ----
-            link_x = tilt_servo_x + SERVO_L/2;
-            link_z = neck_z + ROTATE_PLATFORM_H + 3 + SERVO_H + 8;
+        // ═══ 3. Tilt 舵机 (平台前部) ═══
+        translate([tilt_servo_x, -SERVO_W/2, tilt_servo_z]) {
+            // 舵机本体
+            color(C_SERVO_TILT) {
+                cube([SERVO_L, SERVO_W, SERVO_H-4]);
+                translate([0, -SERVO_W/2, SERVO_H-4])
+                cube([SERVO_L, SERVO_W+16, 1.5]);
+            }
+            // 舵机臂
+            translate([SERVO_L/2, SERVO_W/2, SERVO_H])
+            color(C_SERVO_TILT)
+            cylinder(r=SERVO_SHAFT_D/2, h=5);
+            translate([SERVO_L/2, SERVO_W/2, SERVO_H+5])
+            color("#CCCCCC")
+            cylinder(r=8, h=2);
+
+            // 连杆 (从舵机臂到头部连接球)
             color("#888C94")
-            translate([link_x, 0, link_z])
+            translate([SERVO_L/2, SERVO_W/2, SERVO_H+7])
             hull() {
-                cylinder(r=2.5, h=4);
-                translate([0, 10, 28]) cylinder(r=2.5, h=4);
+                cylinder(r=3, h=2);
+                translate([pivot_x - tilt_servo_x - SERVO_L/2, 0, 38])
+                cylinder(r=3, h=2);
             }
         }
+
+        // ═══ 4. 完整头部 (绕铰链俯仰) ═══
+        translate([pivot_x, pivot_y, pivot_z])
+        rotate([-TILT_ANGLE + SCREEN_TILT_BASE, 0, 0])
+        translate([-pivot_x, -pivot_y, -pivot_z])
+        head_assembly(sr);
     }
 }
 
