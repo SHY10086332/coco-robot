@@ -1,6 +1,6 @@
 """
-Coco 导购机器人 — 2D 概念效果图 v6.2 (双轴云台 pan+tilt)
-总高 ~1060mm, 200mm圆屏, 屏高~840mm, 履带底盘, SG90×2双轴追踪
+Coco 导购机器人 — 2D 概念效果图 v6.2 (双轴云台 pan+tilt，头部一体旋转)
+总高 ~1060mm, 200mm圆屏, 屏高~840mm, 屏幕+外壳+天线一体俯仰, SG90×2双轴追踪
 """
 
 import math
@@ -417,13 +417,14 @@ try:
 except Exception:
     font_lg = font_md = font_sm = ImageFont.load_default()
 
-title = "Coco v6.2 立式导购机器人 (双轴云台 Pan+Tilt 自适应追踪)"
+title = "Coco v6.2 立式导购机器人 (双轴云台，头部一体旋转自适应追踪)"
 tb = draw.textbbox((0, 0), title, font=font_lg)
 tw = tb[2] - tb[0]
 draw.text((cx - tw // 2, 50), title, fill=(255, 255, 255, 230), font=font_lg)
 
 specs = [
-    ("8寸圆屏 (5°~55°仰角)", screen_cx - screen_rx - 30, screen_cy),
+    ("8寸圆屏 (5°~55°俯仰)", screen_cx - screen_rx - 30, screen_cy),
+    ("头部外壳 (一体旋转)", cx + head_rx - 60, head_cy - 30),
     ("履带底盘", cx - 180, chassis_top + chassis_h // 2),
     ("麦克风", mic_cx + 50, mic_cy),
     ("天线", ant_base_x + 45, ant_top - 12),
@@ -433,7 +434,7 @@ for label, lx, ly in specs:
     draw.ellipse([lx - 4, ly - 4, lx + 4, ly + 4], fill=(255, 255, 255, 200))
     draw.text((lx + 2, ly - 28), label, fill=(255, 255, 255, 170), font=font_sm)
 
-footer = "v6.2 Floor-Standing  ·  8\" Screen @ ~840mm  ·  Dual-Axis Pan-Tilt (±50° pan, 5°~55° tilt)  ·  SG90×2 Servo Tracking  ·  Whisper + Qwen2.5 + CosyVoice"
+footer = "v6.2 Floor-Standing  ·  8\" Screen @ ~840mm  ·  Screen+Shell+Antenna Tilt as One  ·  ±50° pan, 5°~55° tilt  ·  SG90×2  ·  Whisper + Qwen2.5 + CosyVoice"
 fb = draw.textbbox((0, 0), footer, font=font_sm)
 fw = fb[2] - fb[0]
 draw.text((cx - fw // 2, H - 55), footer, fill=(255, 255, 255, 90), font=font_sm)
